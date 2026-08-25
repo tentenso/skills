@@ -1,70 +1,185 @@
 ---
 name: weknora
-description: 通过 WeKnora REST API 检索和管理知识库内容。用于列出知识库、查询知识详情、混合检索，以及按明确目标上传文件、导入 URL、创建或更新 Markdown、重新解析或删除知识；不用于 WeKnora 部署运维、模型配置或聊天会话。
+description: >
+  Import documents and perform knowledge retrieval via WeKnora API. Use when
+  uploading files, URLs, or Markdown to a knowledge base, searching knowledge
+  with hybrid retrieval (vector + keyword), or querying knowledge details.
+  Triggers: (1) uploading documents to a knowledge base, (2) hybrid search
+  across knowledge bases, (3) listing/querying knowledge base contents.
+metadata: {"openclaw": {"requires": {"env": ["WEKNORA_API_KEY", "WEKNORA_BASE_URL"]}}}
 ---
+# WeKnora
 
-# WeKnora 知识库操作
+Knowledge base document import and retrieval through the WeKnora REST API.
 
-通过 WeKnora REST API 查询、检索和管理知识库内容。以实际 API 响应为准，不根据名称猜测知识库或知识条目 ID。
+## Setup
 
-## 配置访问
 
-调用前检查以下环境变量：
-
-- `WEKNORA_BASE_URL`：必须是以 `/api/v1` 结尾的 WeKnora API 地址，例如 `https://weknora.example.com/api/v1`。
-- `WEKNORA_API_KEY`：从 WeKnora 账户设置或管理员处取得的 API Key。
-- `WEKNORA_TENANT_ID`：仅平台级 API Key 需要，脚本会将其作为 `X-Tenant-ID` 请求头发送。
-
-缺少必需配置时停止调用，请用户在运行环境中设置；不要要求用户把 API Key 粘贴到对话中，也不要输出、记录或写入仓库。不得关闭 TLS 证书校验。
-
-使用 [scripts/weknora-api.sh](scripts/weknora-api.sh) 发起请求。该脚本统一添加鉴权和请求 ID，支持 JSON 请求与文件上传：
+1. Get your API Key from the WeKnora web UI (account settings page)
+2. Configure environment variables:
 
 ```bash
-<skill-dir>/scripts/weknora-api.sh request GET "knowledge-bases"
-<skill-dir>/scripts/weknora-api.sh request POST "knowledge-bases/<kb-id>/hybrid-search" '<json>'
-<skill-dir>/scripts/weknora-api.sh request-file POST "knowledge-bases/<kb-id>/knowledge/manual" payload.json
-<skill-dir>/scripts/weknora-api.sh upload-file "<kb-id>" "/absolute/path/document.pdf" true
+export WEKNORA_BASE_URL="https://your-server.com/api/v1"
+export WEKNORA_API_KEY="sk-your-api-key"
 ```
 
-请求体、权限、端点和响应字段按需查阅 [references/api.md](references/api.md)。不要把端点名、字段或枚举从示例类推到未记录的接口。
+> Add the above to `~/.zshrc` or `~/.bashrc` to persist across sessions.
 
-## 操作流程
+## Credential Check
 
-1. 区分只读检索、内容导入、更新、重解析、取消解析和删除；只执行用户要求的范围。
-2. 先列出或读取资源，解析真实的 KB ID、知识 ID、标题和当前状态。名称重复或目标范围不唯一时停止询问。
-3. 核对 API Key 能力：读取和检索需要 `retrieve`，内容写入需要 `ingest`；平台级 Key 还需有效的 `WEKNORA_TENANT_ID`。
-4. JSON 请求使用结构化生成方式构造正文。不要手工拼接未转义的用户文本、URL 或 Markdown。
-5. 执行后检查 HTTP 结果和 JSON 中的 `success`。写操作还要重新读取对应资源，核对标题、来源、KB 归属和状态。
+Verify credentials before any API call. Stop and prompt the user if unset.
 
-KB 内混合检索优先使用 `POST /knowledge-bases/:id/hybrid-search`。`GET` 携带 JSON body 只是服务端保留的兼容方式，不作为默认调用方式。
-
-## 写入与破坏性操作
-
-- 上传文件、导入 URL 或创建 Markdown 前，必须已明确源内容和目标 KB；先报告解析出的 KB 名称与 ID。当前请求已明确授权该次创建时无需重复确认。
-- 更新、重解析、取消解析或删除前，先读取目标并展示知识标题、知识 ID、所属 KB 和具体影响，然后取得该次确认。
-- 删除是异步操作。提交成功只代表任务已受理，必须继续查询或明确报告尚未完成。
-- 不自动重试写操作。网络超时后的结果未知时先读取目标状态；`409` 可能表示文件或 URL 已存在，应报告服务端返回的现有知识条目，不重复创建。
-- 不清空整个知识库，也不扩展到批量删除、知识库生命周期管理或其它未包含在本技能范围内的接口。
-
-## 解析进度
-
-上传、URL 导入、Markdown 发布或重解析后，以 `GET /knowledge/:id` 返回的 `parse_status` 为准。按固定间隔进行有上限的轮询；默认最多等待 5 分钟、每 10 秒一次。达到上限仍未终止时报告当前状态，不无限等待。
-
-终止状态通常为 `completed`、`failed` 或 `cancelled`；`finalizing` 表示主解析完成但富化任务仍在运行，不能误报为全部完成。失败时读取 `error_message`，未经用户确认不自动重解析。
-
-## 完成报告
-
-报告实际观察到的结果：
-
-```text
-操作：列出 / 检索 / 上传 / 导入 URL / 创建 Markdown / 更新 / 重解析 / 取消 / 删除
-目标：<KB 名称与 ID> / <知识标题与 ID>
-输入：<文件路径、URL 或查询摘要；不包含密钥>
-结果：<返回数量、knowledge ID、parse_status 或任务 ID>
-核对：<重新读取的资源和状态>
-未完成项：<仍在解析、权限不足、重复内容或错误>
+```bash
+if [ -z "$WEKNORA_BASE_URL" ] || [ -z "$WEKNORA_API_KEY" ]; then
+  echo "Missing WeKnora credentials. Set WEKNORA_BASE_URL and WEKNORA_API_KEY per Setup."
+  exit 1
+fi
 ```
 
-## 来源
+## API Call Template
 
-本技能移植自 ClawHub `@lyingbug/weknora` 1.0.1（MIT-0），并针对本仓库规范调整。API 细节已对照 Tencent/WeKnora 官方仓库提交 `01ec6c0509a6e1ad62617f6125d3093842910fb0` 核验；服务端版本不同时，应以该部署的官方文档和实际响应为准。
+All requests go to `$WEKNORA_BASE_URL` with a shared header set. Define a helper:
+
+```bash
+wk_api() {
+  local method="$1" endpoint="$2" body="$3"
+  curl -s -X "$method" "$WEKNORA_BASE_URL/$endpoint" \
+    -H "X-API-Key: $WEKNORA_API_KEY" \
+    -H "Content-Type: application/json" \
+    -H "X-Request-ID: $(uuidgen 2>/dev/null || date +%s)" \
+    ${body:+-d "$body"}
+}
+```
+
+For file uploads use `curl -F` directly (multipart/form-data).
+
+## API Decision Table
+
+|User Intent |Endpoint |Key Params |
+|---|---|---|
+|List knowledge bases |`GET /knowledge-bases` |— |
+|View KB details |`GET /knowledge-bases/:id` |— |
+|Upload a file |`POST /knowledge-bases/:id/knowledge/file` |`file` (form-data), `enable_multimodel` |
+|Import a web page |`POST /knowledge-bases/:id/knowledge/url` |`url`, `enable_multimodel` |
+|Write Markdown content |`POST /knowledge-bases/:id/knowledge/manual` |`title`, `content`, `tag_id` |
+|Check upload progress |`GET /knowledge/:id` |watch `parse_status` |
+|Browse KB contents |`GET /knowledge-bases/:id/knowledge` |`page`, `page_size`, `tag_id` |
+|Edit Markdown knowledge |`PUT /knowledge/manual/:id` |`title`, `content` |
+|Delete a knowledge entry |`DELETE /knowledge/:id` |— |
+|Search within a KB |`GET /knowledge-bases/:id/hybrid-search` |`query_text`, `match_count`, thresholds |
+|Search across KBs |`POST /knowledge-search` |`query`, `knowledge_base_ids` |
+
+## Common Workflows
+
+### Upload File and Wait for Parsing
+
+```bash
+# 1. Find target KB
+wk_api GET "knowledge-bases"
+# -> pick kb_id from data[].id
+
+# 2. Upload file
+curl -s -X POST "$WEKNORA_BASE_URL/knowledge-bases/<kb_id>/knowledge/file" \
+  -H "X-API-Key: $WEKNORA_API_KEY" \
+  -F 'file=@document.pdf' -F 'enable_multimodel=true'
+# -> get knowledge_id from data.id
+
+# 3. Poll until parsed
+wk_api GET "knowledge/<knowledge_id>"
+# -> repeat until data.parse_status == "completed"
+```
+
+### Import URL
+
+```bash
+wk_api POST "knowledge-bases/<kb_id>/knowledge/url" \
+  '{"url": "https://example.com/article", "enable_multimodel": true}'
+# -> poll knowledge/:id same as file upload
+```
+
+### Write Markdown Knowledge
+
+```bash
+wk_api POST "knowledge-bases/<kb_id>/knowledge/manual" \
+  '{"title": "Meeting Notes", "content": "# Q1 Review\n\nKey points..."}'
+```
+
+### Search Knowledge
+
+```bash
+# Single-KB hybrid search (vector + keyword)
+wk_api GET "knowledge-bases/<kb_id>/hybrid-search" \
+  '{"query_text": "deployment process", "match_count": 5}'
+
+# Cross-KB semantic search
+wk_api POST "knowledge-search" \
+  '{"query": "deployment process", "knowledge_base_ids": ["kb-1", "kb-2"]}'
+```
+
+### Browse and Read KB Contents
+
+```bash
+# List knowledge entries (paginated)
+wk_api GET "knowledge-bases/<kb_id>/knowledge?page=1&page_size=20"
+
+# Get full detail of one entry
+wk_api GET "knowledge/<knowledge_id>"
+```
+
+## Core Response Fields
+
+**Knowledge Base** (`GET /knowledge-bases`): `data[]` — `id`, `name`, `description`, `type` (`document` | `faq`), `embedding_model_id`, `knowledge_count`, `chunk_count`, `is_processing`, `created_at`.
+
+**Knowledge Entry** (`GET /knowledge/:id`): `data` — `id`, `title`, `description` (auto-generated summary), `type` (`file` | `url` | `manual`), `parse_status`, `enable_status`, `file_name`, `file_type`, `file_size`, `source` (URL origin), `created_at`, `processed_at`, `error_message`.
+
+**Search Result** (`hybrid-search`): `data[]` — `id`, `content` (chunk text), `score` (relevance 0–1), `knowledge_id`, `knowledge_title`, `knowledge_filename`, `chunk_index`, `chunk_type` (`text` | `summary` | `image`), `match_type`, `metadata`.
+
+**Paginated List** (`GET .../knowledge`): `data[]` + `total`, `page`, `page_size`.
+
+## Enum Values
+
+- `parse_status`: `pending` → `processing` → `completed` | `failed`
+- `enable_status`: `enabled` | `disabled` (knowledge becomes `enabled` after successful parsing)
+- `type` (knowledge): `file` (uploaded file), `url` (web import), `manual` (Markdown)
+- `type` (knowledge base): `document` (standard), `faq` (FAQ pairs)
+- `chunk_type`: `text` (regular chunk), `summary` (auto-generated summary), `image` (image chunk)
+
+## Pagination
+
+- **Offset pagination** (`GET .../knowledge`, `GET /sessions`): use `page` and `page_size` query params. Response includes `total` for calculating pages.
+- **Hybrid search**: returns up to `match_count` results (no pagination; increase `match_count` for more).
+
+## Notes
+
+- `GET /knowledge-bases/:id/hybrid-search` uses GET method but requires a **JSON request body** — pass `-d '{...}'` with curl.
+- After uploading, knowledge `enable_status` starts as `disabled` and auto-switches to `enabled` once `parse_status` reaches `completed`.
+- File upload uses `multipart/form-data`, not JSON. Use `curl -F 'file=@path'`.
+- `file_type` is auto-detected from the uploaded file (supports `pdf`, `docx`, `xlsx`, `pptx`, `txt`, `md`, `csv`, `html`, etc.).
+- Search `score` ranges from 0 to 1; higher is more relevant. Adjust `vector_threshold` (default ~0.5) to filter low-quality matches.
+- When `parse_status` is `failed`, check `error_message` field for the failure reason before retrying with `POST /knowledge/:id/reparse`.
+
+## Error Handling
+
+All errors return:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "ERROR_CODE",
+    "message": "Human-readable description",
+    "details": "Optional extra info"
+  }
+}
+```
+
+|HTTP Code |Meaning |Suggested Action |
+|---|---|---|
+|`400` |Bad request |Check required fields and param formats |
+|`401` |Unauthorized |Verify `WEKNORA_API_KEY` is correct |
+|`403` |Forbidden |Confirm you have access to this resource |
+|`404` |Not found |Check resource ID exists |
+|`413` |Payload too large |Reduce file size or split content |
+|`500` |Server error |Retry after a short delay |
+
+
