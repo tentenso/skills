@@ -13,5 +13,3 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate skill structure
         run: bash scripts/validate-skills.sh
-      - name: Test workbench operator scripts
-        run: bash scripts/test-workbench-operator.sh

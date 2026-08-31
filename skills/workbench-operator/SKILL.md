@@ -1,110 +1,177 @@
 ---
 name: workbench-operator
-description: 通过已配置地址使用稳定 /api/v1 或页面安全操作工厂客户开发工作台。用于查询和更新工厂业务、导入客户 CSV 或聊天记录、处理工作台 JSON，以及核验批量结果。
+description: 通过已配置地址和受支持的访问认证操作工厂客户开发工作台。用于查询或更新工厂级客户、开发关系、互动、待办、商机和草稿，预览或确认 CSV/聊天导入，以及导出并核验结果；不用于直接修改 SQLite、部署维护或未经确认的对外发送。
 ---
 
-# 工作台业务操作员
+# Workbench Operator
 
-通过稳定业务 API 或页面操作工厂客户开发工作台。优先保护工厂隔离、内容真实性、可恢复性和可核验结果。
+通过稳定的 `/api/v1` 操作工作台；正式 API 未覆盖时才使用页面可见控件。始终保护工厂隔离、内容真实性、并发版本和可恢复性。
 
-## 配置访问环境
+## Setup
 
-地址与访问账密可放在系统环境变量中，也可放在 Skill 根目录的 `.env`。`.env` 中出现的同名变量覆盖系统环境变量；只要 `.env` 包含任一认证变量，整组认证配置都以 `.env` 为准，不与系统账密混用：
+从用户或当前执行环境取得以下配置，不猜测地址、端口或认证方式：
 
-```dotenv
-WORKBENCH_BASE_URL=https://workbench.example.com
-WORKBENCH_USERNAME=your-username
-WORKBENCH_PASSWORD=your-password
-```
+| 配置 | 是否必需 | 说明 |
+| --- | --- | --- |
+| `WORKBENCH_BASE_URL` | 是 | 工作台 origin，例如 `https://workbench.example.com`；移除尾部 `/` |
+| `WORKBENCH_USERNAME` + `WORKBENCH_PASSWORD` | 否 | 已批准反向代理使用 HTTP Basic Auth 时成对提供 |
+| `WORKBENCH_AUTH_HEADER` | 否 | 其他代理认证使用的完整请求头；不得与 Basic Auth 同时使用 |
 
-- `WORKBENCH_USERNAME` 与 `WORKBENCH_PASSWORD` 用于外层 HTTP Basic Auth，必须同时配置。
-- 非 Basic Auth 场景可改用完整的 `WORKBENCH_AUTH_HEADER`，但不得与基础账密同时配置。
-- `.env` 只接受上述四个 `WORKBENCH_*` 变量，不执行命令或变量展开。该文件已被 Git 忽略；包含账密时将权限设为 `600`，不得提交、输出或写入业务文件。
+使用当前操作系统或 Agent 已有的环境变量、密钥存储和 HTTP 客户端配置。不要创建依赖特定 shell 的配置脚本，也不要把地址或凭据写入 Skill、业务文件、请求正文或 URL。
 
-每次启用 Skill 时，先解析工作台地址，不得根据浏览器历史、最近使用的 IP 或常见端口猜测：
+工作台应用本身没有登录系统；认证若存在，来自已批准的反向代理。没有认证配置不等于可以猜测或绕过部署边界。若地址缺失，只询问用户准确的“工作台访问地址”。
 
-```bash
-<skill-dir>/scripts/workbench-config.sh resolve
-```
+## Credential Check
 
-- 如果命令成功，使用输出的无尾斜杠地址作为本次 `BASE_URL`。
-- 解析顺序为 Skill 根目录 `.env`、系统环境变量、用户级地址配置文件。如果均未配置，先只询问用户“工作台访问地址”，然后执行：
-
-```bash
-<skill-dir>/scripts/workbench-config.sh init "http://approved-host:port"
-```
-
-- 初始化会使用已配置的访问认证验证 URL，并将地址写到用户级配置目录，文件权限为 `600`；它只作为环境变量未配置时的兼容回退。
-- 不得把地址或账密硬编码到 Skill、命令参数示例或业务文件。
-- 开始操作前执行 `<skill-dir>/scripts/workbench-config.sh check`，再用 `scripts/workbench-api.sh GET /api/v1/health` 检查 API。不可达、证书错误、跳转异常或数据库状态异常时停止写操作并报告。
-- 配置地址不代表批准修改部署边界。若项目文档仍限制为 `127.0.0.1`，不得自行改成局域网监听；部署调整属于独立的架构与安全任务。
-
-## 先加载当前项目规则
-
-在仓库内操作时读取：
-
-1. [AGENTS.md](../../../AGENTS.md)：数据、部署和写入红线。
-2. [DATA_FORMATS.md](../../../DATA_FORMATS.md)：CSV、聊天和工作台 JSON 格式。
-3. [README.md](../../../README.md)：业务状态和日常流程。
-4. 涉及启动、备份、数据库或部署时读取 [DEPLOYMENTS.md](../../../DEPLOYMENTS.md)。
-
-文档与实现不一致时停止写入，查验当前代码，不选择更宽松的解释。
-
-## 选择真实可用的接口
-
-先阅读 [references/ui-and-http.md](references/ui-and-http.md)，按任务选择入口：
-
-- 默认使用 `/api/v1`。先读取 `GET /api/v1/openapi.json` 或参考文件确认方法、路径和字段，不凭内部函数名猜接口。
-- 先用 `GET /api/v1/factories` 按准确名称确认 `factoryId`。所有客户接口必须位于 `/api/v1/factories/{factoryId}` 下；不存在全局客户 API。
-- POST、PUT、PATCH 使用与本次请求内容绑定且重试时保持不变的 `Idempotency-Key`。更新响应含 `updatedAt` 的记录时带回 `expectedUpdatedAt`。
-- API 没有覆盖的页面功能才使用浏览器可见控件。不得抓取或重放 Next.js Server Action ID。
-- API 或页面均无正式入口时停止并报告能力缺口；不得改用 SQLite、临时 SQL 或一次性脚本。
-
-批量导入或数据转换另读 [references/data-workflows.md](references/data-workflows.md)。只读取与当前任务相关的参考文件。
-
-## 判断授权范围
-
-把请求归为以下一种，并只执行对应范围：
-
-- **查询/导出**：读取页面或规范化导出，不修改业务数据。
-- **整理/转换**：生成预览或兼容数据，不写工作台。
-- **预览导入**：调用 API `preview` 或在页面完成预览并报告，不调用最终确认。
-- **实际导入或批量更新**：完成预览、备份和用户最终确认后写入。
-- **单条业务记录**：通过对应 API 或页面新增或修改，并核对结果。
-- **发送或业务判定**：发送外部消息、记录已发送、回复分类、停止或恢复联系、背调审核、商机输赢必须获得该次具体确认。
-- **代码/部署维护**：退出日常业务操作流程，按项目部署规则执行。
-
-用户允许 Agent 使用系统，不等于允许任意批量写入、发送消息或改变业务判断。
-
-## 每次操作的共同步骤
-
-1. 在仓库内工作时运行 `git status --short`，保留用户已有修改。
-2. 解析并检查 `BASE_URL` 与 `/api/v1/health`；记录实际访问环境。
-3. 涉及业务数据时，用工厂列表确认目标工厂名称和 ID。目标不明确就停止询问。
-4. 读取当前状态，确定记录 ID 和工厂归属；不得仅凭姓名选择客户。
-5. 写操作前复述将变化的记录、字段和数量。批量操作必须先预览；最终确认端点会先生成备份，失败则不写入。
-6. 只使用正式 API 或页面入口；不得直接编辑 SQLite。
-7. 提交后用 GET API 重新读取目标记录或批次，核对实际结果、错误、跳过和工厂隔离。只报告真实响应。
-
-## 真实性和并发边界
-
-- 不虚构客户身份、联系方式、公开资料、互动、回复、需求、评分证据或商机金额。
-- 不把草稿记为已发送，不把出站消息写成客户回复，不自动将 `PENDING` 改为 `QUALIFIED` 或 `MISMATCH`。
-- 不向外部转换网站、公共 AI 或未经批准的服务上传客户数据。
-- 工厂客户聚合完全隔离。同一现实客户位于不同工厂时使用不同 customer ID；不得跨工厂复用 ID 或把一厂修改同步到另一厂。
-- 执行批量操作前确认没有其他业务员或 Agent 正在处理同一批记录。收到 `VERSION_CONFLICT` 时重新读取并请用户核对，不覆盖；收到超时先用相同幂等键查询/重试，不换键重复写入。
-- 回复判定、停止或恢复联系、背调审核、创建或结束商机、记录实际发送需要用户针对具体记录确认。批量应用跟进策略还必须先核对 API 预览。确认字样不是用户授权的替代品。
-
-## 完成报告
+任何业务 API 调用前检查首页和健康端点。以下是单行 `curl` 模板；将占位符替换为当前环境的实际值，并按 Setup 追加一种认证选项：
 
 ```text
-完成范围：查询 / 仅格式化 / 已预览 / 已导入 / 已更新
-工作台地址：...
-目标工厂：...
-输入与结果：原始 ...，有效 ...，写入 ...，跳过 ...，错误 ...
-备份：未涉及写入 / <实际备份路径>
-核对：<重新读取的页面、导出统计和工厂隔离结果>
-未处理项与原因：...
+curl --fail-with-body --silent --show-error --request GET <AUTH_OPTION> "<BASE_URL>/"
+curl --fail-with-body --silent --show-error --request GET --header "Accept: application/json" <AUTH_OPTION> "<BASE_URL>/api/v1/health"
 ```
 
-只报告实际执行并观察到的结果。
+认证选项：无代理认证时删除 `<AUTH_OPTION>`；Basic Auth 使用 `--user "<username>:<password>"`；其他认证使用 `--header "<approved-header-name>: <approved-secret>"`。不要打印展开后的凭据。
+
+仅当健康响应的 `data.status` 为 `ok` 时继续。地址缺失、认证配置不完整、`401/403`、证书错误、异常跳转、不可达或数据库健康异常时停止，不尝试写操作或猜测替代凭据。
+
+开始新类型的操作，或接口可能已升级时读取实时合同：
+
+```text
+curl --fail-with-body --silent --show-error --request GET --header "Accept: application/json" <AUTH_OPTION> "<BASE_URL>/api/v1/openapi.json"
+```
+
+## API Call Template
+
+读取请求：
+
+```text
+curl --fail-with-body --silent --show-error --request GET --header "Accept: application/json" <AUTH_OPTION> "<BASE_URL>/api/v1/factories?limit=100"
+```
+
+POST、PUT、PATCH 将 JSON 放在受控的绝对路径文件中，并设置与“方法 + 路径 + 正文”绑定的稳定幂等键：
+
+```text
+curl --fail-with-body --silent --show-error --request PATCH --header "Accept: application/json" --header "Content-Type: application/json" --header "Idempotency-Key: <stable-operation-key>" --data-binary "@<absolute-json-file>" <AUTH_OPTION> "<BASE_URL>/api/v1/factories/<factoryId>/customers/<customerId>"
+```
+
+如果当前环境没有 `curl`，使用已有 HTTP 客户端发出等价请求，不安装依赖或改写临时脚本。相同请求重试时复用原键；方法、路径或正文变化时使用新键。超时后先 GET 核对业务结果，再决定是否用原键重试。
+
+更新已有记录前先 GET，将响应中的 `updatedAt` 写入 `expectedUpdatedAt`；更新客户公司网站时使用 `organizationUpdatedAt`。所有业务路径必须以 `/api/v1` 开头，客户资源必须位于 `/api/v1/factories/{factoryId}` 下。查询参数需 URL 编码。
+
+## API Decision Table
+
+下表路径均以 `/api/v1` 开头。请求字段以实时 OpenAPI 为准，不凭页面标签或内部函数名猜测。
+
+| 用户意图 | 方法与端点 | 关键参数或确认 |
+| --- | --- | --- |
+| 检查服务/读取合同 | `GET /health`；`GET /openapi.json` | `data.status = ok` |
+| 查找/读取工厂 | `GET /factories`；`GET /factories/{factoryId}` | 按准确名称选择；重名时让用户选 ID |
+| 创建/更新工厂 | `POST /factories`；`PATCH /factories/{factoryId}` | 更新带 `expectedUpdatedAt` |
+| 查找/读取客户 | `GET /factories/{factoryId}/customers[/{customerId}]` | `q`、`limit`、`cursor`；用强标识核对身份 |
+| 创建/更新客户 | `POST /factories/{factoryId}/customers`；`PATCH /factories/{factoryId}/customers/{customerId}` | `displayName`；更新带 `expectedUpdatedAt` |
+| 更新客户公司网站 | `PATCH /factories/{factoryId}/customers/{customerId}/organization-website` | 使用 `organizationUpdatedAt` 作为 `expectedUpdatedAt` |
+| 归档客户/开始开发 | `POST /factories/{factoryId}/customers/{customerId}/archive`；`POST /factories/{factoryId}/customers/{customerId}/leads` | 归档需 `ARCHIVE_CUSTOMER`；客户必须属于当前工厂 |
+| 读取/更新开发关系 | `GET /factories/{factoryId}/leads[/{leadId}]`；`PATCH /factories/{factoryId}/leads/{leadId}` | 回复分类需 `CONFIRM_REPLY_CLASSIFICATION`；停止联系需 `CONFIRM_STOP_CONTACT` |
+| 推进/恢复联系 | `POST /factories/{factoryId}/leads/{leadId}/advance`；`POST /factories/{factoryId}/leads/{leadId}/resume` | `targetStatus: CONNECTED` 会原子创建当天跟进待办；恢复需 `RESUME_CONTACT`；均带版本值 |
+| 读取/更新背调 | `GET/PATCH /factories/{factoryId}/leads/{leadId}/research` | `REVIEWED` 需证据和 `CONFIRM_RESEARCH_REVIEWED` |
+| 读取/更新评分 | `GET/PUT /factories/{factoryId}/leads/{leadId}/scores` | `scores[]` 的维度必须属于当前工厂 |
+| 读取/记录互动 | `GET/POST /factories/{factoryId}/interactions`；`PATCH /factories/{factoryId}/interactions/{interactionId}` | 非内部互动需 `RECORD_ACTUAL_INTERACTION` |
+| 读取/创建/完成待办 | `GET/POST /factories/{factoryId}/tasks`；`POST /factories/{factoryId}/tasks/{taskId}/complete` | 可选 `leadId` 必须属于当前工厂 |
+| 漏斗与跟进策略 | `GET /factories/{factoryId}/pipeline-stages`；`GET /factories/{factoryId}/followup-policies`；`PATCH /factories/{factoryId}/followup-policies/{policyId}` | 策略更新至少提供一个字段 |
+| 预览/应用跟进策略 | `GET /factories/{factoryId}/followup-policies/application-preview`；`POST /factories/{factoryId}/followup-policies/apply` | 最新 `fingerprint` 和 `APPLY_FOLLOWUP_POLICIES` |
+| 读取/创建/更新商机 | `GET/POST /factories/{factoryId}/opportunities`；`GET/PATCH /factories/{factoryId}/opportunities/{opportunityId}` | 创建需 `CREATE_OPPORTUNITY`；赢/输需 `CONFIRM_OPPORTUNITY_OUTCOME` |
+| 产品与模板 | `GET/POST /factories/{factoryId}/products`；`GET/POST /factories/{factoryId}/message-templates` | 内容必须来自当前工厂的真实配置 |
+| 读取/生成/审核草稿 | `GET/POST /factories/{factoryId}/drafts`；`PATCH /factories/{factoryId}/drafts/{draftId}` | 草稿内容只能来自已核验事实；审核不代表已发送 |
+| 记录草稿已发送 | `POST /factories/{factoryId}/drafts/{draftId}/sent` | 只记录已在外部真实发送的消息；需 `RECORD_ACTUAL_SEND` |
+| 预览/确认潜客 CSV | `POST /factories/{factoryId}/imports/prospects/preview`；`POST /factories/{factoryId}/imports/prospects/confirm` | 原 CSV、`fingerprint`、`IMPORT_PROSPECTS` |
+| 预览/确认完整聊天 | `POST /factories/{factoryId}/imports/chats/preview`；`POST /factories/{factoryId}/imports/chats/confirm` | `leadId`、原文、别名、`fingerprint`、`IMPORT_CHAT` |
+| 导入批次/工厂导出 | `GET /factories/{factoryId}/import-batches`；`GET /factories/{factoryId}/export` | 只读取目标工厂数据 |
+| 分析 | `GET /factories/{factoryId}/analytics/dashboard`；`GET /factories/{factoryId}/analytics/channels`；`GET /factories/{factoryId}/analytics/pipeline`；`GET /factories/{factoryId}/analytics/replies`；`GET /factories/{factoryId}/analytics/stopped` | `replies` 和 `stopped` 支持分页 |
+
+完整资源表、确认常量和页面回退入口见 [references/ui-and-http.md](references/ui-and-http.md)。只在任务涉及对应功能时读取。
+
+## Common Workflows
+
+### Locate the Factory and Record
+
+1. `GET /api/v1/factories?limit=100`，按用户给出的准确名称确认 `factoryId`；目标不明确就停止询问。
+2. 在该工厂下查询客户或开发关系。客户优先按邮箱、WhatsApp、LinkedIn，或“姓名 + 公司”核对，不仅凭姓名选择。
+3. GET 目标明细，保存记录 ID、工厂归属和 `updatedAt`。任何跨工厂 ID、不一致状态或重复候选都先交给用户核对。
+
+### Update One Record Safely
+
+1. GET 当前记录，确定只需改变的字段。
+2. 在请求 JSON 中加入最新 `expectedUpdatedAt`，向用户复述目标记录、旧值和新值；涉及业务判断时取得该次具体确认。
+3. 用新的稳定幂等键提交一次。
+4. 再次 GET 同一记录，比较字段、`updatedAt` 和工厂归属。只报告实际响应。
+
+### Preview and Confirm an Import
+
+批量导入前读取 [references/data-workflows.md](references/data-workflows.md) 以及源数据所属项目的 `DATA_FORMATS.md`（若存在）。
+
+1. 固定目标 `factoryId`，保留原始 CSV/聊天正文，不补造缺失信息。
+2. 调用对应 `preview`，报告 `fingerprint`、有效、错误、重复、跳过及方向统计；预览不授权写入。
+3. 让用户确认目标工厂、预览指纹、写入数量和错误/跳过处理。
+4. 确认正文保留完全相同的源内容和参数，并加入原 `expectedFingerprint` 与 `IMPORT_PROSPECTS` 或 `IMPORT_CHAT`；预览和确认使用不同幂等键。
+5. 确认响应必须包含实际 `backupPath`。随后 GET `import-batches` 及相关客户、开发关系或互动，核对写入、跳过、错误和工厂隔离。
+
+### Apply a Sensitive Business Decision
+
+回复分类、停止或恢复联系、背调审核、创建商机、商机赢/输、记录真实互动和记录已发送均需用户针对具体记录确认。API 的确认字符串只是防误触合同，不能代替用户授权。
+
+工作台的“记录已发送”只归档已经发生的外部发送，不会替用户发送消息。真正对外发送属于另一个动作，必须单独取得授权并使用获批准的发送工具。
+
+### Fall Back to the UI
+
+仅当实时 OpenAPI 没有覆盖但页面存在正式入口时，读取 [references/ui-and-http.md](references/ui-and-http.md)，通过可见标签和控件操作并重新读取结果。不得抓取、硬编码或重放 Next.js Server Action ID。API 和页面都没有入口时报告能力缺口，不改用 SQLite、临时 SQL 或一次性脚本。
+
+## Core Response Fields
+
+- 成功：`{ "data": ... }`；分页列表另含 `meta.limit`、`meta.nextCursor`、`meta.hasMore`、`meta.total`。
+- 错误：`{ "error": { "code", "message", "details?" } }`。
+- 健康：`data.status`、`data.schemaVersion`。
+- 可更新记录：保留实际 `id`、工厂归属和 `updatedAt`；客户公司另有 `organizationUpdatedAt`。
+- 导入预览：以实际 `fingerprint` 和计数为准。导入确认：核对 `backupPath`、导入结果和回显的 `preview`。
+- 跟进策略预览：以最新 `fingerprint` 和候选名单为准；提交时业务状态变化会触发 `PREVIEW_CHANGED`。
+
+## Enum Values
+
+- `relationshipStatus`: `NEW` | `CONTACTED` | `CONNECTED` | `REPLIED` | `STOPPED`
+- `replyClassification`: `NONE` | `PENDING` | `QUALIFIED` | `MISMATCH`
+- `researchStatus`: `NOT_REVIEWED` | `IMPORTED` | `REVIEWED` | `UNAVAILABLE`
+- 商机 `status`: `OPEN` | `WON` | `LOST`
+- 草稿 `status`: `DRAFT` | `APPROVED`；记录真实发送后为 `SENT`
+- 待办 `priority`: `LOW` | `MEDIUM` | `HIGH` | `URGENT`
+
+联系状态、回复分类和漏斗阶段是独立维度，不得互相推断。入站互动可把回复分类推进到 `PENDING`，但不代表 `QUALIFIED`；草稿 `APPROVED` 也不代表已发送。
+
+## Pagination
+
+分页列表使用 `limit`（1-100，默认 50）和服务返回的 `meta.nextCursor`。只在 `meta.hasMore` 为 `true` 时把该游标原样用于下一页；不得自行构造游标。部分列表支持 `q`，查询值需 URL 编码。
+
+## Notes
+
+- 在工作台源码仓库内执行任务时，先读该仓库的 `AGENTS.md`；数据任务另读 `DATA_FORMATS.md` 和 `README.md`，启动、备份、数据库或部署任务另读 `DEPLOYMENTS.md`。文档与实现不一致时停止写入并查验当前代码。
+- 不虚构客户身份、联系方式、公开资料、互动、回复、需求、评分证据或商机金额；不向未经批准的第三方服务上传客户数据。
+- 同一现实客户在不同工厂使用不同 customer ID。不得跨工厂复用 ID、搜索全局客户或把一厂变更同步到另一厂。
+- 不直接编辑 SQLite，不用临时脚本绕过正式 API、页面预览、备份、确认或审计。
+- 批量操作前确认没有其他用户或 Agent 正在处理同一批记录。查询结果、版本或预览变化时停止剩余批次并重新核对。
+- `GET /api/export` 是旧的全部工厂 schema 3 工作台 JSON；日常任务优先使用工厂级 `/api/v1/factories/{factoryId}/export`，避免读取无关敏感数据。规范 JSON 合并和数据库恢复不属于普通 `/api/v1` 导入。
+
+## Error Handling
+
+| 状态/错误 | 处理方式 |
+| --- | --- |
+| 地址未配置、认证配置冲突 | 停止，请用户提供准确地址或修正一种认证方式 |
+| `401` / `403` | 视为外层代理拒绝；核对已批准凭据，不尝试绕过 |
+| `202 PENDING_OR_UNKNOWN` | 同一请求可能仍在执行；先 GET 查询业务结果，不换幂等键重复写入 |
+| `400` | 检查 JSON、游标、幂等键或业务前提，不静默改业务数据 |
+| `404` | 核对当前工厂和资源 ID；不得转为全局搜索 |
+| `409 VERSION_CONFLICT` | 重新 GET 并请用户核对，不覆盖新版本 |
+| `409 PREVIEW_CHANGED` | 重新预览并重新取得用户确认 |
+| `409 CONFIRMATION_REQUIRED` | 取得对应具体业务确认；不自动补确认值 |
+| `409 IDEMPOTENCY_KEY_REUSED` | 原键已绑定其他请求；检查请求差异，不用重试掩盖冲突 |
+| `422 VALIDATION_ERROR` | 按 `details` 修正字段，不猜测缺失值 |
+| 超时或 `5xx` | 先 GET 查询实际结果；仅对完全相同请求复用原幂等键 |
+
+完成后报告：实际工作台地址、目标工厂、执行范围、输入与成功/跳过/错误数量、实际备份路径、重新读取的核验结果，以及未处理项和原因。不得声称未执行的写入、备份或核验已经完成。

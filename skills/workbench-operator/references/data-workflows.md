@@ -1,6 +1,6 @@
 # 数据导入与批量操作流程
 
-执行本文件前，先完成访问地址初始化、目标工厂确认，并阅读仓库 `DATA_FORMATS.md`。
+执行本文件前，先完成 `SKILL.md` 的 Setup 和 Credential Check、确认目标工厂，并阅读源数据所属项目的 `DATA_FORMATS.md`（若存在）。
 
 ## 潜客 CSV
 

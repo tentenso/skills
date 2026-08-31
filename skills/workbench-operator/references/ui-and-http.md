@@ -1,6 +1,6 @@
 # 工作台功能与接口参考
 
-使用 `scripts/workbench-config.sh resolve` 得到 `BASE_URL`。脚本自动加载 Skill 根目录 `.env`，其中的配置优先于系统环境变量。页面中的 `factoryId` 必须来自当前工厂页面 URL 或系统结果，不得猜测。
+从用户或当前执行环境取得已批准的 `BASE_URL` 和可选反向代理认证。页面中的 `factoryId` 必须来自当前工厂页面 URL 或系统结果，不得猜测。
 
 ## API 共同约定
 
@@ -12,15 +12,7 @@
 - `GET /api/export` 仍是全部工厂的 schema 3 工作台 JSON；日常查询优先使用工厂级 API，避免读取无关敏感数据。
 - 页面 Server Action 不是 API，不得抓取、硬编码或重放 Action ID。
 
-调用脚本：
-
-```bash
-scripts/workbench-api.sh GET /api/v1/factories
-WORKBENCH_IDEMPOTENCY_KEY="stable-operation-key" \
-  scripts/workbench-api.sh POST /api/v1/factories/{factoryId}/customers /absolute/path/request.json
-```
-
-Nginx 等外层 HTTP Basic Auth 使用 `WORKBENCH_USERNAME` 与 `WORKBENCH_PASSWORD`。其他认证方式可设置完整的 `WORKBENCH_AUTH_HEADER`，两种方式不能同时使用。变量可来自系统环境或 Skill 根目录 `.env`，不得把凭据写入 URL、请求正文或业务文件。
+请求按 `SKILL.md` 的 Setup、Credential Check 和 API Call Template 执行。认证配置来自当前操作系统、Agent 或 HTTP 客户端的安全配置，不得把凭据写入 URL、请求正文或业务文件。
 
 ## API 资源
 
@@ -61,13 +53,13 @@ Nginx 等外层 HTTP Basic Auth 使用 `WORKBENCH_USERNAME` 与 `WORKBENCH_PASSW
 | --- | --- | --- | --- |
 | 总览 | `/factories/{factoryId}` | 查看客户、触达、建联、回复、商机和待办统计 | 与目标工厂名称和明细页一致 |
 | 客户库 | `/factories/{factoryId}/contacts` | 搜索、新增、编辑、归档当前工厂客户；开始开发；处理待分配旧客户 | 客户聚合和开发关系均只属于当前工厂 |
-| 今日优先 | `/factories/{factoryId}/priority` | 查看优先客户；确认已触达或已建联 | 状态只改变目标工厂开发关系 |
+| 今日优先 | `/factories/{factoryId}/priority` | 查看优先客户；确认已触达或已建联 | 建联时还应核对目标客户当天跟进待办 |
 | 待办中心 | `/factories/{factoryId}/tasks` | 新建、筛选、完成待办 | 状态、到期时间和关联客户正确 |
 | 回复中心 | `/factories/{factoryId}/replies` | 查看真实回复和回复分类 | 业务判断仍在开发关系页确认 |
 | 商机中心 | `/factories/{factoryId}/opportunities` | 创建和更新商机 | 客户、金额、币种、状态和预计日期准确 |
 | 互动记录 | `/factories/{factoryId}/interactions` | 记录/编辑互动；预览并导入聊天 | 方向、渠道、时间、正文和状态变化正确 |
 | 渠道分析 | `/factories/{factoryId}/analytics` | 查看渠道回复率与销售漏斗 | 仅基于真实互动和状态 |
-| 领英客户池 | `/factories/{factoryId}/prospects` | CSV 导入、背调更新、公司网站和联系状态推进 | 导入批次、画像、评分和当前工厂归属正确 |
+| 领英客户池 | `/factories/{factoryId}/prospects` | CSV 导入、背调更新、公司网站和联系状态推进 | 点击“好友通过了”后，核对已建联状态及绑定该客户、当天截止的跟进待办 |
 | 停止联系 | `/factories/{factoryId}/stopped` | 查看停止客户并恢复 | 恢复后为已触达，清除停止原因；原回复分类保持不变 |
 | 文案中心 | `/factories/{factoryId}/messages` | 创建模板、生成/审核草稿、记录实际发送 | 记录发送会创建出站互动；必须是实际已发送内容 |
 | 开发关系 | `/factories/{factoryId}/leads` | 修改联系状态、回复判断、漏斗、下一步和五维评分 | 分类、评分依据和阶段互不替代 |
@@ -86,7 +78,7 @@ Nginx 等外层 HTTP Basic Auth 使用 `WORKBENCH_USERNAME` 与 `WORKBENCH_PASSW
 | 编辑联系人 | 姓名、地区、语言、公司、职位和联系方式 | 只修改目标工厂副本 |
 | 开始开发 | `customerId` | 为当前工厂客户建立唯一开发关系 |
 | 更新开发关系 | 联系状态、回复判断、漏斗阶段、来源、下一步、日期、停止原因 | 状态、回复和漏斗是三个独立维度 |
-| 推进联系状态 | 已触达或已建联 | 只允许合法状态推进，不代表客户回复 |
+| 推进联系状态 | 已触达或已建联 | 只允许合法状态推进，不代表客户回复；首次推进到已建联会在同一事务创建普通优先级、当天截止的“发送建联后的第一条破冰或跟进消息”待办，重复推进不重复创建 |
 | 保存评分 | 当前五个维度的分数和依据 | 每项不得超过该维度上限；属于当前工厂 |
 | 创建互动 | 客户关系、方向、渠道、类型、标题、正文、译文、发生时间 | 非内部备注需要确认；入站会设为已回复/待判断，出站会将未触达推进为已触达 |
 | 编辑互动 | 渠道、类型、标题、正文、译文、发生时间 | 不能通过编辑改变原方向 |
