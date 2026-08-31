@@ -1,6 +1,6 @@
 # 工作台功能与接口参考
 
-使用 `scripts/workbench-config.sh resolve` 得到 `BASE_URL`。页面中的 `factoryId` 必须来自当前工厂页面 URL 或系统结果，不得猜测。
+使用 `scripts/workbench-config.sh resolve` 得到 `BASE_URL`。脚本自动加载 Skill 根目录 `.env`，其中的配置优先于系统环境变量。页面中的 `factoryId` 必须来自当前工厂页面 URL 或系统结果，不得猜测。
 
 ## API 共同约定
 
@@ -20,7 +20,7 @@ WORKBENCH_IDEMPOTENCY_KEY="stable-operation-key" \
   scripts/workbench-api.sh POST /api/v1/factories/{factoryId}/customers /absolute/path/request.json
 ```
 
-Nginx 等外层认证需要请求头时，临时设置 `WORKBENCH_AUTH_HEADER`；不得把凭据写入 URL 或文件。
+Nginx 等外层 HTTP Basic Auth 使用 `WORKBENCH_USERNAME` 与 `WORKBENCH_PASSWORD`。其他认证方式可设置完整的 `WORKBENCH_AUTH_HEADER`，两种方式不能同时使用。变量可来自系统环境或 Skill 根目录 `.env`，不得把凭据写入 URL、请求正文或业务文件。
 
 ## API 资源
 

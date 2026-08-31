@@ -7,7 +7,19 @@ description: 通过已配置地址使用稳定 /api/v1 或页面安全操作工�
 
 通过稳定业务 API 或页面操作工厂客户开发工作台。优先保护工厂隔离、内容真实性、可恢复性和可核验结果。
 
-## 首次初始化访问地址
+## 配置访问环境
+
+地址与访问账密可放在系统环境变量中，也可放在 Skill 根目录的 `.env`。`.env` 中出现的同名变量覆盖系统环境变量；只要 `.env` 包含任一认证变量，整组认证配置都以 `.env` 为准，不与系统账密混用：
+
+```dotenv
+WORKBENCH_BASE_URL=https://workbench.example.com
+WORKBENCH_USERNAME=your-username
+WORKBENCH_PASSWORD=your-password
+```
+
+- `WORKBENCH_USERNAME` 与 `WORKBENCH_PASSWORD` 用于外层 HTTP Basic Auth，必须同时配置。
+- 非 Basic Auth 场景可改用完整的 `WORKBENCH_AUTH_HEADER`，但不得与基础账密同时配置。
+- `.env` 只接受上述四个 `WORKBENCH_*` 变量，不执行命令或变量展开。该文件已被 Git 忽略；包含账密时将权限设为 `600`，不得提交、输出或写入业务文件。
 
 每次启用 Skill 时，先解析工作台地址，不得根据浏览器历史、最近使用的 IP 或常见端口猜测：
 
@@ -16,16 +28,15 @@ description: 通过已配置地址使用稳定 /api/v1 或页面安全操作工�
 ```
 
 - 如果命令成功，使用输出的无尾斜杠地址作为本次 `BASE_URL`。
-- 如果尚未配置，先只询问用户“工作台访问地址”，然后执行：
+- 解析顺序为 Skill 根目录 `.env`、系统环境变量、用户级地址配置文件。如果均未配置，先只询问用户“工作台访问地址”，然后执行：
 
 ```bash
 <skill-dir>/scripts/workbench-config.sh init "http://approved-host:port"
 ```
 
-- 初始化会验证 URL、探测首页并将地址写到用户级配置目录，文件权限为 `600`。
-- `WORKBENCH_BASE_URL` 环境变量优先于配置文件，适合临时切换环境；不得把地址硬编码到 Skill 或业务文件。
+- 初始化会使用已配置的访问认证验证 URL，并将地址写到用户级配置目录，文件权限为 `600`；它只作为环境变量未配置时的兼容回退。
+- 不得把地址或账密硬编码到 Skill、命令参数示例或业务文件。
 - 开始操作前执行 `<skill-dir>/scripts/workbench-config.sh check`，再用 `scripts/workbench-api.sh GET /api/v1/health` 检查 API。不可达、证书错误、跳转异常或数据库状态异常时停止写操作并报告。
-- 代理认证所需请求头只能通过临时环境变量 `WORKBENCH_AUTH_HEADER` 提供，不写入 Skill、仓库、命令输出或业务文件。
 - 配置地址不代表批准修改部署边界。若项目文档仍限制为 `127.0.0.1`，不得自行改成局域网监听；部署调整属于独立的架构与安全任务。
 
 ## 先加载当前项目规则

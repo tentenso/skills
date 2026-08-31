@@ -2,6 +2,8 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/workbench-env.sh"
+workbench_load_env
 
 usage() {
   echo "usage: workbench-api.sh GET <api-path> | workbench-api.sh <POST|PUT|PATCH> <api-path> [json-file]" >&2
@@ -48,9 +50,7 @@ curl_args=(
   --header "accept: application/json"
 )
 
-if [[ -n "${WORKBENCH_AUTH_HEADER:-}" ]]; then
-  curl_args+=(--header "${WORKBENCH_AUTH_HEADER}")
-fi
+workbench_append_curl_auth curl_args
 
 if [[ "${method}" != "GET" ]]; then
   curl_args+=(

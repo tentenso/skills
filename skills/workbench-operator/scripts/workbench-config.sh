@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/workbench-env.sh"
+workbench_load_env
+
 config_root="${XDG_CONFIG_HOME:-${HOME}/.config}/workbench-operator"
 config_file="${config_root}/base-url"
 
@@ -44,9 +48,17 @@ resolve_url() {
 
 probe_url() {
   local base_url="$1"
-  curl --fail --silent --show-error --location \
-    --connect-timeout 3 --max-time 8 \
-    --output /dev/null "${base_url}/"
+  local curl_args=(
+    --fail
+    --silent
+    --show-error
+    --location
+    --connect-timeout 3
+    --max-time 8
+    --output /dev/null
+  )
+  workbench_append_curl_auth curl_args
+  curl "${curl_args[@]}" "${base_url}/"
 }
 
 case "${1:-}" in
