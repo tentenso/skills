@@ -1,116 +1,84 @@
-# 工作台功能与接口参考
+# 工作台 API 与 UI 回退参考
 
-从用户或当前执行环境取得已批准的 `BASE_URL` 和可选反向代理认证。页面中的 `factoryId` 必须来自当前工厂页面 URL 或系统结果，不得猜测。
+本参考以 `/api/v1` 当前合同为基线（数据库 schema `10`、工厂级导出格式 `2`）。需要核对新操作或字段时读取实时 `/api/v1/openapi.json`；若文档与运行时不一致，停止写入并查验工作台源码和测试。
 
-## API 共同约定
+## 请求与资源合同
 
-- 合同：`GET /api/v1/openapi.json`；健康检查：`GET /api/v1/health`。
-- 成功响应为 `{ "data": ..., "meta": ... }`；失败为 `{ "error": { "code", "message", "details" } }`。
-- 列表支持 `limit`（1-100）、`cursor` 和部分资源的 `q`；使用响应 `meta.nextCursor` 翻页，不自造游标。
-- POST、PUT、PATCH 通过 `Idempotency-Key` 防止重试重复写入。相同键只能用于完全相同的方法、路径和正文。
-- 更新工厂、客户、开发关系、商机或草稿前先 GET，并把返回的 `updatedAt` 作为 `expectedUpdatedAt`。`409 VERSION_CONFLICT` 时停止覆盖并重新核对。
-- `GET /api/export` 仍是全部工厂的 schema 3 工作台 JSON；日常查询优先使用工厂级 API，避免读取无关敏感数据。
-- 页面 Server Action 不是 API，不得抓取、硬编码或重放 Action ID。
+路径均相对于 `/api/v1`。表中的 `...` 只省略重复的 `/factories/{factoryId}` 前缀，不是路径字符。所有 ID 为 UUID；除服务入口和工厂集合外，业务资源必须带用户明确指定的 `factoryId`。
 
-请求按 `SKILL.md` 的 Setup、Credential Check 和 API Call Template 执行。认证配置来自当前操作系统、Agent 或 HTTP 客户端的安全配置，不得把凭据写入 URL、请求正文或业务文件。
+| 资源 | 读取 | 写入或动作 | 关键请求字段 |
+| --- | --- | --- | --- |
+| 服务 | `GET /`、`GET /health`、`GET /openapi.json` | 无 | 按需读取；不作为每次业务调用前置检查 |
+| 工厂 | `GET /factories`、`GET /factories/{factoryId}` | `POST /factories`、`PATCH /factories/{factoryId}` | 创建：`name`、`shortName`；可选 `industry`、`senderName`、`primaryColor`；更新支持 `expectedUpdatedAt` |
+| 客户 | `GET /factories/{factoryId}/customers[/{customerId}]` | `POST /factories/{factoryId}/customers`、`PATCH .../customers/{customerId}` | 创建至少 `displayName`；只提交可靠的身份、组织、职位、地区、IANA 时区和联系方式字段；更新支持 `expectedUpdatedAt` |
+| 客户公司网站 | 客户明细返回 `organizationUpdatedAt` | `PATCH .../customers/{customerId}/organization-website` | `website` 为 URL 或 `null`；请求键 `expectedUpdatedAt` 使用最新 `organizationUpdatedAt` |
+| 归档/开始开发 | 先读取客户 | `POST .../customers/{customerId}/archive`、`POST .../customers/{customerId}/leads` | 归档带 `expectedUpdatedAt` 和 `ARCHIVE_CUSTOMER`；客户不得有活跃开发关系 |
+| 开发关系 | `GET /factories/{factoryId}/leads[/{leadId}]` | `PATCH .../leads/{leadId}`、`POST .../leads/{leadId}/advance`、`POST .../leads/{leadId}/resume` | 更新/推进/恢复带 `expectedUpdatedAt`；推进目标仅 `CONTACTED` 或 `CONNECTED` |
+| 话术生成 | 无需健康前置检查 | `POST .../leads/{leadId}/message-generation` | `channel`、`isDevelopmentLetter` 必填；可选 `taskId`、`subject`；`channel = 其他` 时需 `customChannel`；使用幂等键并记录 `INTERNAL` 互动 |
+| 评分 | `GET .../leads/{leadId}/scores` | `PUT .../leads/{leadId}/scores` | 严格请求 `{ "score": 0..100 }`；响应含 `leadId`、`score`、`maxScore: 100` |
+| 背调 | `GET .../leads/{leadId}/research` | `PATCH .../leads/{leadId}/research` | 不存在时 `data: null`；更新支持 `expectedUpdatedAt`；新标记 `REVIEWED` 需实际 `evidence` 和确认 |
+| 漏斗 | `GET .../pipeline-stages` | 无 | 返回当前工厂默认阶段 |
+| 互动 | `GET .../interactions` | `POST .../interactions`、`PATCH .../interactions/{interactionId}` | 创建需 `leadId`、`direction`、`channel`、`interactionType`、`body`、`occurredAt`；PATCH 仍需后四项且不接受 `direction` |
+| 待办 | `GET .../tasks` | `POST .../tasks`、`POST .../tasks/{taskId}/complete` | 创建需 `title`、`priority`；`leadId`、`description`、`dueAt` 可选 |
+| 跟进策略 | `GET .../followup-policies`、`GET .../followup-policies/application-preview` | `PATCH .../followup-policies/{policyId}`、`POST .../followup-policies/apply` | 更新至少提供 `name`、`minimumScore`、`intervalDays`、`isActive` 之一；应用需最新 `expectedFingerprint` 和确认 |
+| 商机 | `GET .../opportunities[/{opportunityId}]` | `POST .../opportunities`、`PATCH .../opportunities/{opportunityId}` | 创建需 `leadId`、`title` 和确认；更新支持 `expectedUpdatedAt`；赢/输需确认 |
+| 产品 | `GET .../products` | `POST .../products` | `name` 必填，`category`、`description` 可选 |
+| 导入 | `GET .../import-batches` | `POST .../imports/prospects/{preview|confirm}`、`POST .../imports/chats/{preview|confirm}` | 见 [data-workflows.md](data-workflows.md) |
+| 分析 | `GET .../analytics/dashboard`、`channels`、`pipeline`、`replies`、`stopped` | 无 | `replies`、`stopped` 分页 |
+| 工厂导出 | `GET .../export` | 无 | `format = factory-sales-workbench-api-export`、`schemaVersion = 2`；仅含目标工厂的工厂、客户、开发关系、互动、待办、商机和导入批次聚合 |
 
-## API 资源
-
-| 资源 | 列表/读取 | 写入与动作 |
-| --- | --- | --- |
-| 工厂 | `GET /factories`、`GET /factories/{factoryId}` | `POST /factories`、`PATCH /factories/{factoryId}` |
-| 客户 | `GET /factories/{factoryId}/customers[/{customerId}]` | `POST/PATCH customers`、`PATCH customers/{id}/organization-website`、`POST customers/{id}/archive`、`POST customers/{id}/leads` |
-| 开发关系、背调与评分 | `GET .../leads[/{leadId}]`、`GET .../leads/{id}/{research|scores}` | `PATCH .../leads/{id}`、`POST .../leads/{id}/{advance|resume}`、`PATCH .../leads/{id}/research`、`PUT .../leads/{id}/scores` |
-| 漏斗与跟进策略 | `GET .../pipeline-stages`、`GET .../followup-policies`、`GET .../followup-policies/application-preview` | `PATCH .../followup-policies/{id}`、`POST .../followup-policies/apply` |
-| 互动与待办 | `GET .../interactions`、`GET .../tasks` | `POST/PATCH interactions`、`POST tasks`、`POST tasks/{id}/complete` |
-| 商机 | `GET .../opportunities[/{id}]` | `POST .../opportunities`、`PATCH .../opportunities/{id}` |
-| 产品与话术 | `GET/POST .../products`、`GET/POST .../message-templates` | `GET/POST/PATCH .../drafts`、`POST .../drafts/{id}/sent` |
-| 导入 | `GET .../import-batches` | `POST .../imports/{prospects|chats}/{preview|confirm}` |
-| 分析与导出 | `GET .../analytics/{dashboard|channels|pipeline|replies|stopped}` | `GET .../export` 仅导出目标工厂 |
-
-上表路径都以 `/api/v1` 开头。客户没有全局路由；发现缺少 `factoryId` 的客户路径应视为错误，不尝试调用。
+工厂、客户、开发关系、互动、待办、商机、产品、导入批次以及 `analytics/replies`、`analytics/stopped` 的列表分页；`q` 只适用于客户和开发关系。请求对象严格校验，不能把页面字段或旧版字段直接提交给 API。
 
 ## 明确确认字段
 
-| 业务动作 | API 确认值 | 前提 |
+| 业务动作 | API 字段和值 | 用户确认前提 |
 | --- | --- | --- |
-| 判定有效回复/暂不匹配 | `confirmations: ["CONFIRM_REPLY_CLASSIFICATION"]` | 用户已确认具体 lead 和判断 |
-| 停止联系 | `confirmations: ["CONFIRM_STOP_CONTACT"]` | 用户已确认具体 lead 和原因 |
-| 恢复联系 | `confirmation: "RESUME_CONTACT"` | 用户已确认具体已停止 lead |
-| 将背调标记为已审核 | `confirmation: "CONFIRM_RESEARCH_REVIEWED"` | 已实际查看公开资料并填写证据 |
-| 归档客户 | `confirmation: "ARCHIVE_CUSTOMER"` | 用户已确认具体客户，且不存在活跃开发关系 |
-| 记录真实互动 | `confirmation: "RECORD_ACTUAL_INTERACTION"` | 非内部备注的收发内容确实已经发生 |
-| 创建商机 | `confirmation: "CREATE_OPPORTUNITY"` | 用户确认存在真实需求 |
-| 商机赢单/输单 | `confirmation: "CONFIRM_OPPORTUNITY_OUTCOME"` | 用户确认具体结果 |
-| 记录实际发送 | `confirmation: "RECORD_ACTUAL_SEND"` | 消息已在外部渠道真实发送 |
-| 应用跟进策略 | `confirmation: "APPLY_FOLLOWUP_POLICIES"` | 用户确认同一工厂最新预览及指纹 |
+| 归档客户 | `confirmation: "ARCHIVE_CUSTOMER"` | 已确认具体客户及归档意图 |
+| 有效回复/不匹配 | `confirmations: ["CONFIRM_REPLY_CLASSIFICATION"]` | 已确认具体 lead 和分类 |
+| 停止联系 | `confirmations: ["CONFIRM_STOP_CONTACT"]` | 已确认具体 lead 和原因 |
+| 恢复联系 | `confirmation: "RESUME_CONTACT"` | 已确认具体已停止 lead |
+| 背调标为已审核 | `confirmation: "CONFIRM_RESEARCH_REVIEWED"` | 已实际核验公开资料并保留证据 |
+| 记录真实互动 | `confirmation: "RECORD_ACTUAL_INTERACTION"` | `INBOUND`/`OUTBOUND` 内容确实发生；`INTERNAL` 不需要 |
+| 应用跟进策略 | `confirmation: "APPLY_FOLLOWUP_POLICIES"` | 已确认同一工厂最新名单和指纹 |
+| 创建商机 | `confirmation: "CREATE_OPPORTUNITY"` | 已确认存在真实需求 |
+| 商机赢单/输单 | `confirmation: "CONFIRM_OPPORTUNITY_OUTCOME"` | 已确认具体结果 |
+| 导入潜客 CSV | `confirmation: "IMPORT_PROSPECTS"` | 已确认目标工厂、原 CSV、统计和指纹 |
+| 导入聊天 | `confirmation: "IMPORT_CHAT"` | 已确认 lead、原文、别名、方向统计和指纹 |
 
-确认值只满足 API 防误触合同，不代表用户已经授权。Agent 必须先取得对应业务确认。
+确认值只是 API 防误触合同。没有用户对当前对象和当前数据的确认时，不得自行填入。
 
-## 页面功能路由
+## 不支持的 API
 
-| 页面 | 路径 | 可执行功能 | 提交后核对 |
-| --- | --- | --- | --- |
-| 总览 | `/factories/{factoryId}` | 查看客户、触达、建联、回复、商机和待办统计 | 与目标工厂名称和明细页一致 |
-| 客户库 | `/factories/{factoryId}/contacts` | 搜索、新增、编辑、归档当前工厂客户；开始开发；处理待分配旧客户 | 客户聚合和开发关系均只属于当前工厂 |
-| 今日优先 | `/factories/{factoryId}/priority` | 查看优先客户；确认已触达或已建联 | 建联时还应核对目标客户当天跟进待办 |
-| 待办中心 | `/factories/{factoryId}/tasks` | 新建、筛选、完成待办 | 状态、到期时间和关联客户正确 |
-| 回复中心 | `/factories/{factoryId}/replies` | 查看真实回复和回复分类 | 业务判断仍在开发关系页确认 |
-| 商机中心 | `/factories/{factoryId}/opportunities` | 创建和更新商机 | 客户、金额、币种、状态和预计日期准确 |
-| 互动记录 | `/factories/{factoryId}/interactions` | 记录/编辑互动；预览并导入聊天 | 方向、渠道、时间、正文和状态变化正确 |
-| 渠道分析 | `/factories/{factoryId}/analytics` | 查看渠道回复率与销售漏斗 | 仅基于真实互动和状态 |
-| 领英客户池 | `/factories/{factoryId}/prospects` | CSV 导入、背调更新、公司网站和联系状态推进 | 点击“好友通过了”后，核对已建联状态及绑定该客户、当天截止的跟进待办 |
-| 停止联系 | `/factories/{factoryId}/stopped` | 查看停止客户并恢复 | 恢复后为已触达，清除停止原因；原回复分类保持不变 |
-| 文案中心 | `/factories/{factoryId}/messages` | 创建模板、生成/审核草稿、记录实际发送 | 记录发送会创建出站互动；必须是实际已发送内容 |
-| 开发关系 | `/factories/{factoryId}/leads` | 修改联系状态、回复判断、漏斗、下一步和五维评分 | 分类、评分依据和阶段互不替代 |
-| 数据管理 | `/factories/{factoryId}/data` | 导出、规范 JSON 合并、受控旧版迁移 | 导入统计、外键和工厂范围正确 |
-| 工厂设置 | `/factories/{factoryId}/settings` | 工厂资料、产品和跟进策略 | 配置只属于当前工厂 |
+- 不存在 `/api/v1/customers`、`/api/v1/export` 或任何缺少 `factoryId` 的客户/导出路由。
+- 不存在 `/api/v1/factories/{factoryId}/message-templates`、`.../drafts`、`.../drafts/{draftId}` 或 `.../drafts/{draftId}/sent`。
+- 不存在全库 JSON 导出、导入、合并、迁移或恢复 API；旧 `/api/export` 也不是可用的业务入口。
+- 不存在删除 API。不得试探旧路由、重放 Server Action ID、直接写 SQLite，或用脚本绕过页面/API 合同。
 
-## 页面写操作字段和副作用
+## UI 回退入口
 
-下列名称用于理解页面行为和检查实现，不是远程 HTTP 调用合同。
+只在实时 OpenAPI 缺少所需能力且页面有正式可见控件时回退。以下是当前页面路由，不代表额外 HTTP API：
 
-| 操作 | 主要输入 | 关键副作用和确认点 |
+| 页面 | 路径 | 可核对范围 |
 | --- | --- | --- |
-| 创建工厂 | 名称、简称、行业、发信人、品牌色 | 同事务创建默认漏斗、五维评分和跟进策略 |
-| 更新工厂 | 法定名称、网站、国家、时区、语言、发信人、公司简介、能力、证据、品牌色 | 影响后续话术上下文，不改历史实发内容 |
-| 创建联系人 | 姓名、地区、语言、公开简介、备注、公司、职位、邮箱、电话、WhatsApp、LinkedIn | 在目标工厂创建独立客户聚合，不自动创建开发关系 |
-| 编辑联系人 | 姓名、地区、语言、公司、职位和联系方式 | 只修改目标工厂副本 |
-| 开始开发 | `customerId` | 为当前工厂客户建立唯一开发关系 |
-| 更新开发关系 | 联系状态、回复判断、漏斗阶段、来源、下一步、日期、停止原因 | 状态、回复和漏斗是三个独立维度 |
-| 推进联系状态 | 已触达或已建联 | 只允许合法状态推进，不代表客户回复；首次推进到已建联会在同一事务创建普通优先级、当天截止的“发送建联后的第一条破冰或跟进消息”待办，重复推进不重复创建 |
-| 保存评分 | 当前五个维度的分数和依据 | 每项不得超过该维度上限；属于当前工厂 |
-| 创建互动 | 客户关系、方向、渠道、类型、标题、正文、译文、发生时间 | 非内部备注需要确认；入站会设为已回复/待判断，出站会将未触达推进为已触达 |
-| 编辑互动 | 渠道、类型、标题、正文、译文、发生时间 | 不能通过编辑改变原方向 |
-| 创建待办 | 可选客户、标题、说明、到期时间、优先级 | 属于当前工厂；完成后写完成时间 |
-| 创建商机 | 客户、标题、金额、币种、预计日期、备注 | 仅在真实需求确认后创建 |
-| 更新商机 | 标题、进行中/赢单/输单、金额、币种、预计日期、备注 | 赢单/输单需要用户明确业务判断 |
-| 创建产品 | 名称、类别、说明 | 影响当前工厂的话术上下文 |
-| 创建模板 | 名称、渠道、类型、语言、标题模板、正文模板 | 同名模板以版本管理 |
-| 生成草稿 | 客户、类型、语言 | 只使用工厂配置、客户资料和真实互动 |
-| 审核草稿 | 标题、正文、译文、草稿/已审核 | 仍未发送，不创建互动 |
-| 记录已发送 | 草稿、渠道 | 草稿变为已发送并创建真实出站互动；必须单独确认 |
-| 更新背调 | 画像 URL、About、近期动态、证据、研究状态 | API 使用 lead 下的 `research` 资源；“已审核”必须有实际读取证据 |
-| 恢复停止联系 | 客户开发关系 | 恢复为已触达，清除停止信息，下一步设为重新评估；不改回复分类 |
-| 更新/应用跟进策略 | 名称、最低评分、间隔、启用状态 | 为尚无计划日期的开发关系批量填写下一步和日期，不创建待办 |
-| 归档联系人 | 联系人 | 仅影响当前工厂；该客户存在活跃开发关系时拒绝 |
+| 工厂总览 | `/factories/{factoryId}` | 当前工厂的客户、触达、回复、商机和待办汇总 |
+| 客户库 | `/factories/{factoryId}/contacts` | 客户搜索、资料、归档和开始开发 |
+| 待办中心 | `/factories/{factoryId}/tasks` | 待办筛选、创建、完成及关联客户 |
+| 回复中心 | `/factories/{factoryId}/replies` | 真实回复及待确认分类 |
+| 商机中心 | `/factories/{factoryId}/opportunities` | 商机客户、金额、币种、状态和预计日期 |
+| 互动记录 | `/factories/{factoryId}/interactions` | 互动方向、渠道、时间、正文及聊天导入 |
+| 渠道分析 | `/factories/{factoryId}/analytics` | 渠道和漏斗指标 |
+| 领英客户池 | `/factories/{factoryId}/prospects` | CSV 导入、背调、公司网站及状态推进 |
+| 停止联系 | `/factories/{factoryId}/stopped` | 停止客户及恢复结果 |
+| 开发关系 | `/factories/{factoryId}/leads` | 联系状态、回复分类、漏斗、下一步和总评分 |
+| 数据管理 | `/factories/{factoryId}/data` | 仅查看管理员 migration、备份和恢复边界；没有上传、合并、恢复或迁移按钮 |
+| 工厂设置 | `/factories/{factoryId}/settings` | 工厂资料、产品和跟进策略 |
 
-## 当前支持的批量入口
+页面没有独立的“今日优先”或“文案中心”路由。页面出现消息撰写控件也不代表 API 会发送消息或存在草稿资源；任何外发动作仍需另行授权。
 
-| 批量任务 | 页面入口 | 是否支持预览 | 结果核对 |
-| --- | --- | --- | --- |
-| 新增/复用潜客并加入工厂 | 领英客户池 CSV | 是 | 导入批次、联系人、开发关系、错误/跳过 |
-| 导入单个客户完整聊天 | 互动记录 | 是 | 入站/出站、重复、状态变化 |
-| 合并系统规范 JSON | 数据管理 | 是 | 工厂数、总行数、插入/跳过和外键 |
-| 应用跟进策略 | API `application-preview` 后调用 `apply`；页面可补充 | 是，API 返回名单和指纹 | 新增计划日期的开发关系数量及审计记录 |
-| 旧版快照迁移 | 数据管理 | 是 | 仅空隔离库和恢复流程使用，不是日常批量入口 |
+## UI 操作约定
 
-其他批量修改没有专用端点时，先列出明确记录 ID、旧值和新值，取得确认后用带幂等键和版本值的单条 API 分批执行。没有正式 API 或页面入口就停止，不自行拼接数据库操作。
-
-## Agent 操作约定
-
-1. 先从页面可见工厂名称确认环境，再读取 URL 中的 `factoryId`。
-2. 查找联系人时优先使用邮箱、WhatsApp、LinkedIn 或“姓名 + 公司”，不只用姓名。
-3. API 写入前保存原始 GET 响应中的 ID 和 `updatedAt`；公司网站端点使用客户响应的 `organizationUpdatedAt`。页面回退时用可见标签定位控件，不依赖按钮顺序。
-4. 提交前保存预览统计。提交后重新 GET 明细或批次，比较记录数和关键字段。
-5. API 超时使用同一幂等键重试；页面超时先查询实际状态，不盲目再次点击。
+1. 从页面可见工厂名称核对环境，再读取 URL 的 `factoryId`；不以最近访问页面推断目标工厂。
+2. 用可见标签定位控件，不依赖按钮顺序、内部组件名或 Server Action 标识。
+3. 提交前记录目标、旧值、新值和预览统计；涉及确认表中的动作时先取得用户确认。
+4. 提交后重新读取 API 明细、导入批次或页面结果，核对工厂归属、数量和关键字段。
+5. 页面超时先查询实际状态，不盲目再次点击。API 写入则遵守 `SKILL.md` 的版本值和幂等规则。
