@@ -9,16 +9,26 @@ description: 通过已配置的稳定 API 或现有页面操作工厂客户开�
 
 ## Setup
 
-工作台默认访问入口为用户指定的 `https://workbench.tentenso.com:4430/`。优先使用用户当次明确指定的地址，其次读取全局环境变量 `WORKBENCH_BASE_URL`，未配置时使用上述默认入口；拼接 API 路径前移除基址末尾的 `/`。只访问已明确配置或授权的入口，访问失败时不得自动回退到本机或其他地址。应用后端的本机监听地址 `127.0.0.1:8765` 属于部署配置，不是默认访问入口，不得为完成业务任务改变监听范围。
+工作台配置的唯一来源是技能根目录、即本文件同目录的 `.env` 文件（`workbench-operator/.env`）。执行任务前使用 dotenv 规则读取该文件；不得读取 shell、进程、全局环境变量、其他目录的 `.env` 或 HTTP 客户端的隐式环境配置。文件不存在、无法读取、变量重复或配置冲突时停止并报告，不猜测替代值。
+
+`.env` 只允许配置以下变量：
+
+| 变量 | 使用条件 |
+| --- | --- |
+| `WORKBENCH_BASE_URL` | 可选；未设置时使用内置默认入口 `https://workbench.tentenso.com:4430/`。拼接 API 路径前移除基址末尾的 `/` |
+| `WORKBENCH_USERNAME` + `WORKBENCH_PASSWORD` | 反向代理明确使用 HTTP Basic Auth 时从 `.env` 成对读取 |
+| `WORKBENCH_AUTH_HEADER` | 反向代理明确提供其他完整认证请求头时从 `.env` 读取；不得与 Basic Auth 同时使用 |
+
+目标地址只取自 `.env` 中的 `WORKBENCH_BASE_URL`、用户当次明确指定的地址或已授权的入口；访问失败时不得自动回退到本机或其他地址。应用后端的本机监听地址 `127.0.0.1:8765` 属于部署配置，不是默认访问入口，不得为完成业务任务改变监听范围。
 
 认证不是应用 API 的一部分。已配置入口的反向代理可提供外层认证：
 
 | 配置 | 使用条件 |
 | --- | --- |
-| `WORKBENCH_USERNAME` + `WORKBENCH_PASSWORD` | 反向代理明确使用 HTTP Basic Auth 时成对使用 |
-| `WORKBENCH_AUTH_HEADER` | 反向代理明确提供其他完整认证请求头时使用；不得与 Basic Auth 同时使用 |
+| `WORKBENCH_USERNAME` + `WORKBENCH_PASSWORD` | 从技能根目录 `.env` 读取；反向代理明确使用 HTTP Basic Auth 时成对使用 |
+| `WORKBENCH_AUTH_HEADER` | 从技能根目录 `.env` 读取；反向代理明确提供其他完整认证请求头时使用，不得与 Basic Auth 同时使用 |
 
-使用当前操作系统或 Agent 已有的环境变量、密钥存储和 HTTP 客户端配置。地址可保存在全局环境配置中；不要把凭据写入 Skill、业务文件、请求正文、URL 或日志，也不要猜测或绕过认证。
+不要把 `.env` 内容、凭据或展开后的认证命令写入 Skill、业务文件、请求正文、URL、日志或回复；不要猜测或绕过认证。`.env` 已由技能目录的 `.gitignore` 排除，不得强制加入版本控制。
 
 ## API Contract Discovery
 
@@ -28,7 +38,7 @@ description: 通过已配置的稳定 API 或现有页面操作工厂客户开�
 curl --fail-with-body --silent --show-error --request GET --header "Accept: application/json" <AUTH_OPTION> "<BASE_URL>/api/v1/openapi.json"
 ```
 
-无代理认证时删除 `<AUTH_OPTION>`；Basic Auth 使用 `--user "<username>:<password>"`；其他认证使用 `--header "<approved-header-name>: <approved-secret>"`。不要打印展开后的命令。业务请求直接按已配置地址和认证发送；实际请求返回地址、认证或数据库错误时再停止并核对配置，不自动回退或替代凭据。
+无代理认证时删除 `<AUTH_OPTION>`；Basic Auth 使用从 `.env` 读取的用户名和密码；其他认证使用从 `.env` 读取的完整请求头。不要打印展开后的命令。业务请求直接按 `.env` 中的地址和认证发送；实际请求返回地址、认证或数据库错误时再停止并核对配置，不自动回退或替代凭据。
 
 ## HTTP Contract
 
