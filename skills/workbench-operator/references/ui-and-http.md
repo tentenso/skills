@@ -38,7 +38,7 @@
 | 停止联系 | `confirmations: ["CONFIRM_STOP_CONTACT"]` | 已确认具体 lead 和原因 |
 | 恢复联系 | `confirmation: "RESUME_CONTACT"` | 已确认具体已停止 lead |
 | 背调标为已审核 | `confirmation: "CONFIRM_RESEARCH_REVIEWED"` | 已实际核验公开资料并保留证据 |
-| 记录真实互动 | `confirmation: "RECORD_ACTUAL_INTERACTION"` | `INBOUND`/`OUTBOUND` 内容确实发生；`INTERNAL` 不需要 |
+| 记录互动 | `confirmation: "RECORD_ACTUAL_INTERACTION"` |  |
 | 应用跟进策略 | `confirmation: "APPLY_FOLLOWUP_POLICIES"` | 已确认同一工厂最新名单和指纹 |
 | 创建商机 | `confirmation: "CREATE_OPPORTUNITY"` | 已确认存在真实需求 |
 | 商机赢单/输单 | `confirmation: "CONFIRM_OPPORTUNITY_OUTCOME"` | 已确认具体结果 |

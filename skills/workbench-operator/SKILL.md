@@ -115,12 +115,6 @@ curl --fail-with-body --silent --show-error --request PATCH --header "Accept: ap
 
 批量导入前读取 [references/data-workflows.md](references/data-workflows.md) 以及源项目的 `DATA_FORMATS.md`（若存在）。预览不授权写入；确认必须使用完全相同的源内容、参数和 `expectedFingerprint`，并在响应中核对实际 `backupPath`。随后读取 `import-batches` 及相关客户、开发关系或互动。
 
-### Apply a Sensitive Decision
-
-归档客户、回复分类、停止或恢复联系、背调审核、记录真实互动、应用跟进策略、创建商机、商机赢/输及确认导入，都需用户针对具体对象和当前预览明确确认。API 确认字符串只防误触，不能替代用户授权。
-
-工作台 API 不发送邮件、LinkedIn 或 WhatsApp 消息。对外发送是另一个动作，必须单独获得授权并使用获批准的发送工具；不能把未发生的联系写成互动。
-
 ### Fall Back to the UI
 
 仅当实时 OpenAPI 没有所需能力、当前页面存在正式可见入口时，读取 [references/ui-and-http.md](references/ui-and-http.md)，通过可见标签和控件操作并重新读取结果。不得抓取、硬编码或重放 Next.js Server Action ID。API 和 UI 都没有入口时报告能力缺口，不改用 SQLite、临时 SQL 或一次性脚本。
