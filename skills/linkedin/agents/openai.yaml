@@ -1,0 +1,4 @@
+interface:
+  display_name: "LinkedIn 邀请预填"
+  short_description: "核对 LinkedIn 资料并预填邀请备注"
+  default_prompt: "使用 $linkedin 在已连接的 FlashID 浏览器中核对资料并预填 LinkedIn 邀请备注，不发送邀请。"

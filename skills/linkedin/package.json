@@ -1,0 +1,11 @@
+{
+  "name": "linkedin-prefill-skill",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "linkedin:prefill": "node linkedin-invite-prefill.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}
