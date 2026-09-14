@@ -110,7 +110,6 @@ curl --fail-with-body --silent --show-error --request PATCH --header "Accept: ap
 
    需要联动完成待办时追加真实的 `taskId`；无待办联动时省略。`channel` 可为 `LinkedIn`、`WhatsApp`、`FB`、`INS`、`Email` 或 `其他`；选择 `其他` 时另传非空 `customChannel`。开发信把 `isDevelopmentLetter` 设为 `true` 并可传 `subject`，服务端会返回标题与正文且不设置普通话术的 300 字符上限；普通话术仍由服务端限制最多 300 个字符。有最近客户入站消息时生成回复，否则生成破冰或后续触达话术。服务端会结合工厂资料、客户背调、近期真实互动、下一步和待办上下文生成内容，客户端不直接访问 Agent 服务。
 3. 使用绑定方法、路径和原始 JSON 的稳定 `Idempotency-Key`。成功响应会返回 `englishBody`、可选 `translatedBody`/`subject`、`interactionId` 和 `completedTaskId`；同一键重试只复用完全相同的请求。
-4. 生成成功只写入当前客户的一条 `INTERNAL`、`AI生成话术` 互动，并按请求完成待办；它不代表已对外发送，不推进联系状态。外发后仍须另行授权，并按真实 `OUTBOUND` 互动流程记录。
 
 ### Preview and Confirm an Import
 
@@ -133,7 +132,6 @@ curl --fail-with-body --silent --show-error --request PATCH --header "Accept: ap
 - `researchStatus`: `NOT_REVIEWED` | `IMPORTED` | `REVIEWED` | `UNAVAILABLE`
 - 商机 `status`: `OPEN` | `WON` | `LOST`；待办 `priority`: `LOW` | `MEDIUM` | `HIGH` | `URGENT`
 - 联系状态、回复分类和漏斗阶段是独立维度。入站互动可推进到已回复/待判断，但不代表 `QUALIFIED`。
-- 话术生成只记录 `INTERNAL` 的 Agent 生成事件，不代表消息已发送，也不会伪造客户回复或自动推进联系状态。
 - 推进到 `CONNECTED` 会在同一事务创建首次跟进待办；重复推进不得据此假定会重复建待办，提交后应同时核对关系和待办。
 - 不虚构身份、联系方式、公开资料、互动、回复、需求、评分证据或商机金额；不向未经批准的第三方上传客户数据。
 - 同一现实客户在不同工厂使用不同 customer ID。不得跨工厂复用 ID、全局搜索客户或同步变更。
