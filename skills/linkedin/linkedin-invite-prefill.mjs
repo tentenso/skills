@@ -85,16 +85,9 @@ function exactNamePattern(name) {
 }
 
 async function disconnectBrowser(browser) {
-  // Playwright's CDP Browser has no public disconnect() method. Closing the
-  // Browser object would also close FlashID's tabs, so close only its private
-  // protocol connection and leave the remote profile running.
-  if (typeof browser.disconnect === "function") {
-    browser.disconnect();
-    return;
-  }
-  if (browser._connection && typeof browser._connection.close === "function") {
-    await browser._connection.close();
-  }
+  // For a Browser returned by connectOverCDP, close() disconnects Playwright
+  // from the remote browser while leaving FlashID and its tabs running.
+  await browser.close();
 }
 
 async function readInput(inputPath) {
