@@ -38,12 +38,13 @@ test("Sales Navigator uses More, prefills the message, and leaves Send untouched
       contentType: "text/html",
       body: `<!doctype html>
         <main>
-          <section componentkey="LeadTopcard">
-            <h1>Sample Customer</h1>
+          <h1>Sales Navigator Lead Page</h1>
+          <section>
+            <h1 data-x--lead--name="" data-anonymize="person-name">Sample Customer</h1>
             <button id="direct-connect">Connect</button>
-            <button id="more" aria-label="More actions">...</button>
+            <button id="more" aria-label="Open actions overflow menu" aria-controls="lead-menu">...</button>
           </section>
-          <div id="menu" role="menu" hidden>
+          <div id="lead-menu" hidden>
             <button id="menu-connect" role="menuitem">Connect</button>
           </div>
           <div id="dialog" role="dialog" hidden>
@@ -56,7 +57,7 @@ test("Sales Navigator uses More, prefills the message, and leaves Send untouched
           document.querySelector('#direct-connect').onclick = () => window.clicked.push('direct-connect');
           document.querySelector('#more').onclick = () => {
             window.clicked.push('more');
-            document.querySelector('#menu').hidden = false;
+            document.querySelector('#lead-menu').hidden = false;
           };
           document.querySelector('#menu-connect').onclick = () => {
             window.clicked.push('menu-connect');
@@ -84,4 +85,41 @@ test("Sales Navigator uses More, prefills the message, and leaves Send untouched
   const page = context.pages()[0];
   assert.equal(await page.locator("textarea").inputValue(), "Sample invitation message");
   assert.deepEqual(await page.evaluate(() => window.clicked), ["more", "menu-connect"]);
+});
+
+test("standard profile fallback finds an exact name without an h1", async (t) => {
+  const browser = await chromium.launch(chromiumLaunchOptions());
+  t.after(() => browser.close());
+  const context = await browser.newContext();
+  const profileUrl = "https://www.linkedin.com/in/sample-customer";
+
+  await context.route(profileUrl, (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html>
+        <main>
+          <section componentkey="Topcard">
+            <span data-anonymize="person-name">Sample Customer</span>
+            <button id="connect">Connect</button>
+          </section>
+          <div id="dialog" role="dialog" hidden>
+            <textarea></textarea>
+          </div>
+        </main>
+        <script>
+          document.querySelector('#connect').onclick = () => {
+            document.querySelector('#dialog').hidden = false;
+          };
+        </script>`,
+    }),
+  );
+
+  const result = await processCustomer(
+    context,
+    { name: "Sample Customer", linkedin: profileUrl, message: "Hello" },
+    10_000,
+  );
+
+  assert.equal(result.status, "prefilled");
+  assert.equal(await context.pages()[0].locator("textarea").inputValue(), "Hello");
 });

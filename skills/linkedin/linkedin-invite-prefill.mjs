@@ -23,7 +23,7 @@ const CONNECTION_STATES = [
 const CONNECT_ACTION_PATTERN =
   /\bconnect\b|\badd friend\b|\binvite .* to connect\b|加为好友|添加好友|建立联系|邀请建立联系/i;
 const MORE_ACTION_PATTERN =
-  /^(?:more(?: actions?)?|see more(?: actions?)?|更多(?:操作)?)(?:\s*\.\.\.)?$/i;
+  /^(?:open actions overflow menu|more(?: actions?)?|see more(?: actions?)?|更多(?:操作)?)(?:\s*\.\.\.)?$/i;
 const ADD_NOTE_PATTERN = /^(?:add a note|add note|添加消息|添加备注)$/i;
 
 export function isSalesNavigatorLeadUrl(value) {
@@ -128,34 +128,75 @@ async function visibleDialog(page, timeoutMs) {
 async function profileCard(page, timeoutMs) {
   const landmarkTimeout = Math.min(timeoutMs, 5_000);
   const topCard = page.locator('section[componentkey*="Topcard"]:visible').first();
-  try {
-    await topCard.waitFor({ state: "visible", timeout: landmarkTimeout });
-    return topCard;
-  } catch {
-    // Older LinkedIn layouts may expose only an h1 instead of a Topcard.
+  if (await topCard.count()) {
+    try {
+      await topCard.waitFor({ state: "visible", timeout: landmarkTimeout });
+      return topCard;
+    } catch {
+      // Older LinkedIn layouts may expose only an h1 instead of a Topcard.
+    }
   }
 
   const genericCard = page.locator('section[componentkey*="profile.card"]:visible').first();
-  try {
-    await genericCard.waitFor({ state: "visible", timeout: landmarkTimeout });
-    return genericCard;
-  } catch {
-    // Fall back to the main content when no profile card landmark exists.
+  if (await genericCard.count()) {
+    try {
+      await genericCard.waitFor({ state: "visible", timeout: landmarkTimeout });
+      return genericCard;
+    } catch {
+      // Fall back to the main content when no profile card landmark exists.
+    }
   }
 
   return page.locator("main").first();
 }
 
 async function profileName(page, scope, expectedName, timeoutMs) {
-  const heading = page.locator("h1:visible").first();
-  if (await heading.count()) {
-    await heading.waitFor({ state: "visible", timeout: timeoutMs });
-    return (await heading.innerText()).trim();
+  const expectedPattern = exactNamePattern(expectedName);
+  const probeTimeout = Math.min(timeoutMs, 5_000);
+
+  // Sales Navigator renders a page-level h1 before the lead's h1. Prefer its
+  // explicit lead-name marker, then search all visible headings for an exact
+  // match instead of assuming the first h1 is the customer's name.
+  const markedHeading = scope
+    .locator('h1[data-x--lead--name]:visible, h1[data-anonymize="person-name"]:visible')
+    .first();
+  if (await markedHeading.count()) {
+    try {
+      await markedHeading.waitFor({ state: "visible", timeout: probeTimeout });
+      const text = (await markedHeading.innerText()).trim();
+      if (expectedPattern.test(text)) {
+        return text;
+      }
+    } catch {
+      // Fall through to the generic heading and exact-text lookups below.
+    }
   }
 
-  const exactName = scope.getByText(exactNamePattern(expectedName)).first();
-  await exactName.waitFor({ state: "visible", timeout: timeoutMs });
-  return (await exactName.innerText()).trim();
+  const headings = scope.locator("h1:visible");
+  let headingTexts = [];
+  if (await headings.count()) {
+    try {
+      await headings.first().waitFor({ state: "visible", timeout: probeTimeout });
+    } catch {
+      // The page may expose the name in a profile-card element without an h1.
+    }
+    headingTexts = await headings.allInnerTexts();
+  }
+  const matchingHeading = headingTexts.find((text) => expectedPattern.test(text.trim()));
+  if (matchingHeading) {
+    return matchingHeading.trim();
+  }
+
+  const exactName = scope.getByText(expectedPattern).first();
+  try {
+    await exactName.waitFor({ state: "visible", timeout: timeoutMs });
+    return (await exactName.innerText()).trim();
+  } catch {
+    if (headingTexts[0]) {
+      return headingTexts[0].trim();
+    }
+    throw new Error(`Profile name is unavailable; expected ${expectedName}`);
+  }
 }
 
 async function visibleMatch(scope, role, name) {
@@ -198,16 +239,38 @@ async function openConnectDialog(page, scope, timeoutMs, options = {}) {
   }
 
   await moreButton.click();
-  const menu = page.locator('[role="menu"]:visible').last();
   const menuTimeout = Math.min(timeoutMs, 10_000);
-  try {
-    await menu.waitFor({ state: "visible", timeout: menuTimeout });
-  } catch {
+  const controlledId = await moreButton.getAttribute("aria-controls");
+  const menuCandidates = [
+    controlledId ? page.locator(`[id="${controlledId}"]:visible`).first() : null,
+    page.locator('[role="menu"]:visible').last(),
+    page.locator('[role="listbox"]:visible').last(),
+    page.locator('[id^="hue-menu-"]:visible').last(),
+  ].filter(Boolean);
+
+  let menu = null;
+  for (const candidate of menuCandidates) {
+    try {
+      await candidate.waitFor({ state: "visible", timeout: menuTimeout });
+      menu = candidate;
+      break;
+    } catch {
+      // Try the next menu representation used by LinkedIn's layouts.
+    }
+  }
+  if (!menu) {
     const menuItem = page.getByRole("menuitem").last();
     try {
       await menuItem.waitFor({ state: "visible", timeout: menuTimeout });
+      menu = menuItem;
     } catch {
-      throw new Error("Connect menu did not open");
+      // Some Sales Navigator menus expose no role at all. The More click still
+      // scopes the following visible Connect action to the opened popover.
+      const connectAction = await visibleMatch(page, "button", CONNECT_ACTION_PATTERN);
+      if (!connectAction) {
+        throw new Error("Connect menu did not open");
+      }
+      menu = page;
     }
   }
   const menuScope = (await menu.count()) > 0 ? menu : page;
@@ -246,6 +309,13 @@ async function fillInvitationNote(page, message, timeoutMs) {
     await editable.waitFor({ state: "visible", timeout: timeoutMs });
   } catch {
     return { filled: false, reason: "Invitation note input is unavailable" };
+  }
+  const maxLength = await editable.getAttribute("maxlength");
+  const maxCharacters = Number(maxLength);
+  if (Number.isInteger(maxCharacters) && maxCharacters > 0 && message.length > maxCharacters) {
+    throw new Error(
+      `Invitation message exceeds LinkedIn's ${maxCharacters}-character limit (${message.length} characters)`,
+    );
   }
   await editable.fill(message);
   const value = await editable.inputValue().catch(async () => editable.innerText());
