@@ -2,6 +2,7 @@
 
 import fs from "node:fs/promises";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 import { chromium } from "playwright";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -21,8 +22,21 @@ const CONNECTION_STATES = [
 
 const CONNECT_ACTION_PATTERN =
   /\bconnect\b|\badd friend\b|\binvite .* to connect\b|加为好友|添加好友|建立联系|邀请建立联系/i;
-const MORE_ACTION_PATTERN = /^(?:more(?: actions?)?|更多)(?:\s*\.\.\.)?$/i;
+const MORE_ACTION_PATTERN =
+  /^(?:more(?: actions?)?|see more(?: actions?)?|更多(?:操作)?)(?:\s*\.\.\.)?$/i;
 const ADD_NOTE_PATTERN = /^(?:add a note|add note|添加消息|添加备注)$/i;
+
+export function isSalesNavigatorLeadUrl(value) {
+  try {
+    const url = new URL(value);
+    return (
+      /(^|\.)linkedin\.com$/i.test(url.hostname) &&
+      /^\/sales\/lead\/[^/]+/i.test(url.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
 
 function parseArgs(argv) {
   const args = {};
@@ -169,11 +183,13 @@ async function findExistingState(page) {
   return null;
 }
 
-async function openConnectDialog(page, scope, timeoutMs) {
-  const directConnect = await visibleMatch(scope, "button", CONNECT_ACTION_PATTERN);
-  if (directConnect) {
-    await directConnect.click();
-    return { existingState: null };
+async function openConnectDialog(page, scope, timeoutMs, options = {}) {
+  if (!options.requireMoreMenu) {
+    const directConnect = await visibleMatch(scope, "button", CONNECT_ACTION_PATTERN);
+    if (directConnect) {
+      await directConnect.click();
+      return { existingState: null };
+    }
   }
 
   const moreButton = await visibleMatch(scope, "button", MORE_ACTION_PATTERN);
@@ -239,7 +255,7 @@ async function fillInvitationNote(page, message, timeoutMs) {
   return { filled: true, reason: null };
 }
 
-async function processCustomer(context, customer, timeoutMs) {
+export async function processCustomer(context, customer, timeoutMs) {
   let page;
   let timeoutHandle;
   const operation = (async () => {
@@ -271,7 +287,9 @@ async function processCustomer(context, customer, timeoutMs) {
       };
     }
 
-    const connect = await openConnectDialog(page, scope, timeoutMs);
+    const connect = await openConnectDialog(page, scope, timeoutMs, {
+      requireMoreMenu: isSalesNavigatorLeadUrl(customer.linkedin),
+    });
     if (connect.existingState) {
       await page.bringToFront().catch(() => {});
       return {
@@ -366,8 +384,10 @@ async function main() {
   console.log(JSON.stringify({ output: outputPath, results }, null, 2));
 }
 
-main().catch((error) => {
-  console.error(error?.message ?? error);
-  console.error(usage());
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error?.message ?? error);
+    console.error(usage());
+    process.exitCode = 1;
+  });
+}

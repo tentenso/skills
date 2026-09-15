@@ -1,13 +1,13 @@
 ---
 name: linkedin
-description: "在已运行的 FlashID 浏览器中用 Playwright 核对 LinkedIn 个人资料并预填邀请备注；用户要求实际预填或审核邀请内容时使用，不发送邀请、不关闭浏览器，也不用于批量抓取或其他 LinkedIn 操作。"
+description: "在已运行的 FlashID 浏览器中用 Playwright 核对 LinkedIn 普通个人资料或 Sales Navigator lead 页面并预填邀请备注；用户要求实际预填或审核邀请内容时使用，不发送邀请、不关闭浏览器，也不用于批量抓取或其他 LinkedIn 操作。"
 ---
 
 # LinkedIn
 
 ## 用途与边界
 
-这个 skill 用于在用户明确提供客户清单并要求预填邀请备注时，连接用户已经运行的 FlashID/Chromium 浏览器，逐个打开 LinkedIn 资料页，核对姓名并填入备注。它只完成审核和预填，不点击 LinkedIn 的“发送”按钮，也不关闭 FlashID 浏览器。
+这个 skill 用于在用户明确提供客户清单并要求预填邀请备注时，连接用户已经运行的 FlashID/Chromium 浏览器，逐个打开 LinkedIn 普通个人资料页或 Sales Navigator lead 客户信息页，核对姓名并填入备注。它只完成审核和预填，不点击 LinkedIn 的“发送”按钮，也不关闭 FlashID 浏览器。
 
 不要把预填结果当成已发送的邀请；不要用本 skill 发送 InMail、消息或连接请求，不要抓取全库资料，也不要绕过 LinkedIn 登录、验证码或访问限制。发送或其他对外动作必须作为独立动作重新取得用户明确授权，并使用获批准的工具。
 
@@ -21,7 +21,7 @@ description: "在已运行的 FlashID 浏览器中用 Playwright 核对 LinkedIn
    npm install
    ```
 
-4. 输入文件必须是 JSON 对象，包含非空 `customers` 数组；每项必须提供非空字符串 `name`、`linkedin` 和 `message`。可参考 [linkedin-customers.example.json](linkedin-customers.example.json)。
+4. 输入文件必须是 JSON 对象，包含非空 `customers` 数组；每项必须提供非空字符串 `name`、`linkedin` 和 `message`。`linkedin` 支持普通个人资料链接以及形如 `/sales/lead/...` 的 Sales Navigator lead 链接；可参考 [linkedin-customers.example.json](linkedin-customers.example.json)。示例中的 `linkedin_examples` 只用于展示链接格式，实际任务只读取 `customers`。
 
 ## 执行
 
@@ -42,7 +42,9 @@ npm run linkedin:prefill -- \
 - 打开其 `linkedin` URL，并等待资料页姓名（兼容 `h1` 或 LinkedIn 个人资料卡）；
 - 要求页面姓名与输入的 `name` 不区分大小写地完全相等，失败则不继续操作；
 - 检查资料卡和“更多”菜单中的 Pending/已发送/Connected 等状态，已有状态时跳过并返回提示；
-- 打开资料卡的“Connect/加为好友”入口，等待邀请弹窗中的输入框并填入 `message`；
+- 普通个人资料页优先打开资料卡的“Connect/加为好友”入口，必要时再从“更多”菜单进入；
+- Sales Navigator lead 页面固定点击客户信息区的三点“更多”菜单，再点击其中的“Connect/加为好友”；
+- 等待弹出的消息输入框并填入 `message`，不点击“Send/发送”；
 - 填入后回读文本校验，校验失败按失败处理。
 
 单个客户超时或出错时记录 `failed` 并继续下一个，不自动重试。成功的审核标签页保持打开；只有超时清理新建标签页。脚本最后只断开 Playwright 与浏览器的连接，不退出或关闭 FlashID。

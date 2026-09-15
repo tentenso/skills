@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "linkedin:prefill": "node linkedin-invite-prefill.mjs"
+    "linkedin:prefill": "node linkedin-invite-prefill.mjs",
+    "test": "node --test linkedin-invite-prefill.test.mjs"
   },
   "dependencies": {
     "playwright": "1.63.0"
