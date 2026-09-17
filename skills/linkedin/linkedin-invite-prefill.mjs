@@ -38,6 +38,37 @@ export function isSalesNavigatorLeadUrl(value) {
   }
 }
 
+function profileVanityName(value) {
+  try {
+    const url = new URL(value);
+    if (!/(^|\.)linkedin\.com$/i.test(url.hostname)) {
+      return null;
+    }
+    const match = url.pathname.match(/^\/in\/([^/]+)\/?$/i);
+    return match ? decodeURIComponent(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function isProfileInviteLink(href, profileUrl) {
+  const vanityName = profileVanityName(profileUrl);
+  if (!href || !vanityName) {
+    return false;
+  }
+
+  try {
+    const inviteUrl = new URL(href, profileUrl);
+    return (
+      /(^|\.)linkedin\.com$/i.test(inviteUrl.hostname) &&
+      /^\/preload\/custom-invite\/?$/i.test(inviteUrl.pathname) &&
+      inviteUrl.searchParams.get("vanityName") === vanityName
+    );
+  } catch {
+    return false;
+  }
+}
+
 function parseArgs(argv) {
   const args = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -118,7 +149,7 @@ async function visibleDialog(page, timeoutMs) {
   }
 }
 
-async function profileCard(page, timeoutMs) {
+async function profileCard(page, profileUrl, timeoutMs) {
   const landmarkTimeout = Math.min(timeoutMs, 5_000);
   const topCard = page.locator('section[componentkey*="Topcard"]:visible').first();
   if (await topCard.count()) {
@@ -140,7 +171,16 @@ async function profileCard(page, timeoutMs) {
     }
   }
 
-  return page.locator("main").first();
+  const main = page.locator("main").first();
+  const directInvite = await visibleProfileInviteLink(main, profileUrl);
+  if (directInvite) {
+    const directInviteCard = directInvite.locator("xpath=ancestor::section[1]");
+    if (await directInviteCard.count()) {
+      return directInviteCard;
+    }
+  }
+
+  return main;
 }
 
 async function profileName(page, scope, expectedName, timeoutMs) {
@@ -204,6 +244,22 @@ async function visibleMatch(scope, role, name) {
   return null;
 }
 
+async function visibleProfileInviteLink(scope, profileUrl) {
+  const links = scope.getByRole("link", { name: CONNECT_ACTION_PATTERN });
+  const count = await links.count();
+  for (let index = 0; index < count; index += 1) {
+    const link = links.nth(index);
+    if (!(await link.isVisible().catch(() => false))) {
+      continue;
+    }
+    const href = await link.getAttribute("href");
+    if (isProfileInviteLink(href, profileUrl)) {
+      return link;
+    }
+  }
+  return null;
+}
+
 async function findExistingState(page) {
   for (const state of CONNECTION_STATES) {
     for (const role of ["button", "link", "menuitem"]) {
@@ -219,7 +275,13 @@ async function findExistingState(page) {
 
 async function openConnectDialog(page, scope, timeoutMs, options = {}) {
   if (!options.requireMoreMenu) {
-    const directConnect = await visibleMatch(scope, "button", CONNECT_ACTION_PATTERN);
+    // LinkedIn's newer profile UI renders the primary Connect action as an
+    // anchor to /preload/custom-invite/, even though it looks like a button.
+    // Match its vanityName to the target profile so recommendation-card links
+    // elsewhere on the page cannot be clicked by mistake.
+    const directConnect =
+      (await visibleProfileInviteLink(scope, options.profileUrl)) ??
+      (await visibleMatch(scope, "button", CONNECT_ACTION_PATTERN));
     if (directConnect) {
       await directConnect.click();
       return { existingState: null };
@@ -330,7 +392,7 @@ export async function processCustomer(context, customer, timeoutMs) {
       timeout: timeoutMs,
     });
 
-    const scope = await profileCard(page, timeoutMs);
+    const scope = await profileCard(page, customer.linkedin, timeoutMs);
     const headingText = await profileName(page, scope, customer.name, timeoutMs);
     if (!exactNamePattern(customer.name).test(headingText)) {
       throw new Error(`Profile mismatch: expected ${customer.name}, got ${headingText}`);
@@ -352,6 +414,7 @@ export async function processCustomer(context, customer, timeoutMs) {
 
     const connect = await openConnectDialog(page, scope, timeoutMs, {
       requireMoreMenu: isSalesNavigatorLeadUrl(customer.linkedin),
+      profileUrl: customer.linkedin,
     });
     if (connect.existingState) {
       await page.bringToFront().catch(() => {});

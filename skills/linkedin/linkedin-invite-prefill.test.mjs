@@ -123,3 +123,68 @@ test("standard profile fallback finds an exact name without an h1", async (t) =>
   assert.equal(result.status, "prefilled");
   assert.equal(await context.pages()[0].locator("textarea").inputValue(), "Hello");
 });
+
+test("new profile UI uses the target direct invite link and adds a note", async (t) => {
+  const browser = await chromium.launch(chromiumLaunchOptions());
+  t.after(() => browser.close());
+  const context = await browser.newContext();
+  const profileUrl = "https://www.linkedin.com/in/sample-customer/";
+
+  await context.route(profileUrl, (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html>
+        <main>
+          <section id="recommendation-card">
+            <span>Other Customer</span>
+            <a id="other-connect"
+               aria-label="Invite Other Customer to connect"
+               href="/preload/custom-invite/?vanityName=other-customer">Connect</a>
+          </section>
+          <section id="profile-card">
+            <span>Sample Customer</span>
+            <a id="target-connect"
+               aria-label="Invite Sample Customer to connect"
+               href="/preload/custom-invite/?vanityName=sample-customer">Connect</a>
+            <button id="more">More</button>
+          </section>
+          <div id="dialog" role="dialog" hidden>
+            <button id="add-note">Add a note</button>
+            <textarea name="message" hidden></textarea>
+            <button id="send">Send</button>
+          </div>
+        </main>
+        <script>
+          window.clicked = [];
+          document.querySelector('#other-connect').onclick = (event) => {
+            event.preventDefault();
+            window.clicked.push('other-connect');
+          };
+          document.querySelector('#target-connect').onclick = (event) => {
+            event.preventDefault();
+            window.clicked.push('target-connect');
+            document.querySelector('#dialog').hidden = false;
+          };
+          document.querySelector('#add-note').onclick = () => {
+            window.clicked.push('add-note');
+            document.querySelector('textarea').hidden = false;
+          };
+          document.querySelector('#more').onclick = () => window.clicked.push('more');
+          document.querySelector('#send').onclick = () => window.clicked.push('send');
+        </script>`,
+    }),
+  );
+
+  const result = await processCustomer(
+    context,
+    { name: "Sample Customer", linkedin: profileUrl, message: "Hello from the new UI" },
+    10_000,
+  );
+
+  assert.equal(result.status, "prefilled");
+  assert.equal(result.linkedin_note_filled, "yes");
+  assert.equal(result.external_sent, "no");
+  const page = context.pages()[0];
+  assert.equal(await page.locator("textarea").inputValue(), "Hello from the new UI");
+  assert.deepEqual(await page.evaluate(() => window.clicked), ["target-connect", "add-note"]);
+});
