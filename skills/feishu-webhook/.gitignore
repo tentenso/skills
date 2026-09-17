@@ -1,0 +1,12 @@
+# Local credentials
+scripts/.env
+
+# Python-generated files
+__pycache__/
+*.py[cod]
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
+*~
