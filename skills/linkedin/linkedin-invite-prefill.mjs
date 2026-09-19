@@ -25,6 +25,8 @@ const CONNECT_ACTION_PATTERN =
 const MORE_ACTION_PATTERN =
   /^(?:open actions overflow menu|more(?: actions?)?|see more(?: actions?)?|更多(?:操作)?)(?:\s*\.\.\.)?$/i;
 const ADD_NOTE_PATTERN = /^(?:add a note|add note|添加消息|添加备注)$/i;
+const VIEW_LINKEDIN_PROFILE_PATTERN =
+  /view\s+linkedin\s+profile|查看\s*(?:linkedin|领英)\s*(?:个人资料|个人档案)/i;
 
 export function isSalesNavigatorLeadUrl(value) {
   try {
@@ -244,6 +246,33 @@ async function visibleMatch(scope, role, name) {
   return null;
 }
 
+async function waitForVisibleMatch(scope, role, name, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const match = await visibleMatch(scope, role, name);
+    if (match) {
+      return match;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  } while (Date.now() < deadline);
+  return null;
+}
+
+async function visibleMenuAction(scope, name) {
+  for (const role of ["menuitem", "link", "button"]) {
+    const action = await visibleMatch(scope, role, name);
+    if (action) {
+      return action;
+    }
+  }
+
+  const textMatches = scope.getByText(name).last();
+  if (await textMatches.count() && await textMatches.isVisible().catch(() => false)) {
+    return textMatches;
+  }
+  return null;
+}
+
 async function visibleProfileInviteLink(scope, profileUrl) {
   const links = scope.getByRole("link", { name: CONNECT_ACTION_PATTERN });
   const count = await links.count();
@@ -273,6 +302,92 @@ async function findExistingState(page) {
   return null;
 }
 
+async function openMoreMenu(page, scope, timeoutMs) {
+  const menuTimeout = Math.min(timeoutMs, 10_000);
+  const moreButton = await waitForVisibleMatch(
+    scope,
+    "button",
+    MORE_ACTION_PATTERN,
+    menuTimeout,
+  );
+  if (!moreButton) {
+    throw new Error("Connect entry not found: More button is unavailable");
+  }
+
+  await moreButton.click();
+  const controlledId = await moreButton.getAttribute("aria-controls");
+  const menuCandidates = [
+    controlledId ? page.locator(`[id="${controlledId}"]:visible`).first() : null,
+    page.locator('[role="menu"]:visible').last(),
+    page.locator('[role="listbox"]:visible').last(),
+    page.locator('[id^="hue-menu-"]:visible').last(),
+  ].filter(Boolean);
+
+  for (const candidate of menuCandidates) {
+    try {
+      await candidate.waitFor({ state: "visible", timeout: menuTimeout });
+      return candidate;
+    } catch {
+      // Try the next menu representation used by LinkedIn's layouts.
+    }
+  }
+
+  const menuItem = page.getByRole("menuitem").last();
+  try {
+    await menuItem.waitFor({ state: "visible", timeout: menuTimeout });
+    // Some layouts expose menu items without a containing menu landmark.
+    return page;
+  } catch {
+    // Some Sales Navigator menus expose no role at all. Use the visible page
+    // as the scope so the caller can still identify the opened action.
+    return page;
+  }
+}
+
+async function openSalesNavigatorProfile(page, scope, timeoutMs) {
+  const menuScope = await openMoreMenu(page, scope, timeoutMs);
+  const profileAction = await visibleMenuAction(menuScope, VIEW_LINKEDIN_PROFILE_PATTERN);
+  if (!profileAction) {
+    return { profilePage: null, menuScope };
+  }
+
+  const context = page.context();
+  const profileUrlPattern = /(^|\.)linkedin\.com\/in\/[^/?#]+/i;
+  const samePage = page
+    .waitForURL(profileUrlPattern, { timeout: timeoutMs })
+    .then(() => page)
+    .catch(() => null);
+  const popup = context
+    .waitForEvent("page", { timeout: timeoutMs })
+    .then((candidate) => candidate)
+    .catch(() => null);
+
+  await profileAction.click();
+  const profilePage = await Promise.race([samePage, popup]);
+  if (!profilePage) {
+    throw new Error("View LinkedIn profile did not open a profile page");
+  }
+  if (!profileUrlPattern.test(profilePage.url())) {
+    await profilePage.waitForURL(profileUrlPattern, { timeout: timeoutMs });
+  }
+  await profilePage.waitForLoadState("domcontentloaded", { timeout: timeoutMs }).catch(() => {});
+  return { profilePage, menuScope: null };
+}
+
+async function openConnectFromMenu(menuScope) {
+  const menuState = await findExistingState(menuScope);
+  if (menuState) {
+    return { existingState: menuState };
+  }
+
+  const connectItem = await visibleMenuAction(menuScope, CONNECT_ACTION_PATTERN);
+  if (!connectItem) {
+    throw new Error("Connect entry not found in More menu");
+  }
+  await connectItem.click();
+  return { existingState: null };
+}
+
 async function openConnectDialog(page, scope, timeoutMs, options = {}) {
   if (!options.requireMoreMenu) {
     // LinkedIn's newer profile UI renders the primary Connect action as an
@@ -288,60 +403,7 @@ async function openConnectDialog(page, scope, timeoutMs, options = {}) {
     }
   }
 
-  const moreButton = await visibleMatch(scope, "button", MORE_ACTION_PATTERN);
-  if (!moreButton) {
-    throw new Error("Connect entry not found: More button is unavailable");
-  }
-
-  await moreButton.click();
-  const menuTimeout = Math.min(timeoutMs, 10_000);
-  const controlledId = await moreButton.getAttribute("aria-controls");
-  const menuCandidates = [
-    controlledId ? page.locator(`[id="${controlledId}"]:visible`).first() : null,
-    page.locator('[role="menu"]:visible').last(),
-    page.locator('[role="listbox"]:visible').last(),
-    page.locator('[id^="hue-menu-"]:visible').last(),
-  ].filter(Boolean);
-
-  let menu = null;
-  for (const candidate of menuCandidates) {
-    try {
-      await candidate.waitFor({ state: "visible", timeout: menuTimeout });
-      menu = candidate;
-      break;
-    } catch {
-      // Try the next menu representation used by LinkedIn's layouts.
-    }
-  }
-  if (!menu) {
-    const menuItem = page.getByRole("menuitem").last();
-    try {
-      await menuItem.waitFor({ state: "visible", timeout: menuTimeout });
-      menu = menuItem;
-    } catch {
-      // Some Sales Navigator menus expose no role at all. The More click still
-      // scopes the following visible Connect action to the opened popover.
-      const connectAction = await visibleMatch(page, "button", CONNECT_ACTION_PATTERN);
-      if (!connectAction) {
-        throw new Error("Connect menu did not open");
-      }
-      menu = page;
-    }
-  }
-  const menuScope = (await menu.count()) > 0 ? menu : page;
-  const menuState = await findExistingState(menuScope);
-  if (menuState) {
-    return { existingState: menuState };
-  }
-
-  const connectItem =
-    (await visibleMatch(menuScope, "menuitem", CONNECT_ACTION_PATTERN)) ??
-    (await visibleMatch(menuScope, "button", CONNECT_ACTION_PATTERN));
-  if (!connectItem) {
-    throw new Error("Connect entry not found in More menu");
-  }
-  await connectItem.click();
-  return { existingState: null };
+  return openConnectFromMenu(await openMoreMenu(page, scope, timeoutMs));
 }
 
 async function fillInvitationNote(page, message, timeoutMs) {
@@ -392,30 +454,54 @@ export async function processCustomer(context, customer, timeoutMs) {
       timeout: timeoutMs,
     });
 
-    const scope = await profileCard(page, customer.linkedin, timeoutMs);
-    const headingText = await profileName(page, scope, customer.name, timeoutMs);
-    if (!exactNamePattern(customer.name).test(headingText)) {
-      throw new Error(`Profile mismatch: expected ${customer.name}, got ${headingText}`);
+    const isSalesNavigatorLead = isSalesNavigatorLeadUrl(customer.linkedin);
+    let scope = await profileCard(page, customer.linkedin, timeoutMs);
+    let connect = null;
+
+    if (isSalesNavigatorLead) {
+      const leadAction = await openSalesNavigatorProfile(page, scope, timeoutMs);
+      if (leadAction.profilePage) {
+        page = leadAction.profilePage;
+        page.setDefaultTimeout(timeoutMs);
+        scope = await profileCard(page, page.url(), timeoutMs);
+      } else {
+        // Keep compatibility with lead pages that still expose Connect in the
+        // opened menu even though newer out-of-network pages expose only View
+        // LinkedIn profile.
+        const headingText = await profileName(page, scope, customer.name, timeoutMs);
+        if (!exactNamePattern(customer.name).test(headingText)) {
+          throw new Error(`Profile mismatch: expected ${customer.name}, got ${headingText}`);
+        }
+        connect = await openConnectFromMenu(leadAction.menuScope);
+      }
     }
 
-    const existingState = await findExistingState(scope);
-    if (existingState) {
-      await page.bringToFront().catch(() => {});
-      return {
-        name: customer.name,
-        linkedin: customer.linkedin,
-        message: customer.message,
-        status: "skipped",
-        linkedin_note_filled: "no",
-        external_sent: "no",
-        failure_reason: `LinkedIn state is already ${existingState}`,
-      };
+    if (!connect) {
+      const headingText = await profileName(page, scope, customer.name, timeoutMs);
+      if (!exactNamePattern(customer.name).test(headingText)) {
+        throw new Error(`Profile mismatch: expected ${customer.name}, got ${headingText}`);
+      }
+
+      const existingState = await findExistingState(scope);
+      if (existingState) {
+        await page.bringToFront().catch(() => {});
+        return {
+          name: customer.name,
+          linkedin: customer.linkedin,
+          message: customer.message,
+          status: "skipped",
+          linkedin_note_filled: "no",
+          external_sent: "no",
+          failure_reason: `LinkedIn state is already ${existingState}`,
+        };
+      }
+
+      connect = await openConnectDialog(page, scope, timeoutMs, {
+        requireMoreMenu: false,
+        profileUrl: page.url(),
+      });
     }
 
-    const connect = await openConnectDialog(page, scope, timeoutMs, {
-      requireMoreMenu: isSalesNavigatorLeadUrl(customer.linkedin),
-      profileUrl: customer.linkedin,
-    });
     if (connect.existingState) {
       await page.bringToFront().catch(() => {});
       return {

@@ -10,6 +10,8 @@ import {
 
 const SALES_LEAD_URL =
   "https://www.linkedin.com/sales/lead/ACwAACIGk3UBdp64fxV6TUOsC_-JPz08ZvUNNWo,NAME_SEARCH,XDM1";
+const OUT_OF_NETWORK_SALES_LEAD_URL =
+  "https://www.linkedin.com/sales/lead/ACwAAFdmVMIB2pcb5v7ZyCt5BkQQD5Q1DalGdKc,OUT_OF_NETWORK,ek2n";
 
 function chromiumLaunchOptions() {
   const candidates = [
@@ -24,6 +26,7 @@ function chromiumLaunchOptions() {
 
 test("recognizes LinkedIn Sales Navigator lead URLs", () => {
   assert.equal(isSalesNavigatorLeadUrl(SALES_LEAD_URL), true);
+  assert.equal(isSalesNavigatorLeadUrl(OUT_OF_NETWORK_SALES_LEAD_URL), true);
   assert.equal(isSalesNavigatorLeadUrl("https://uk.linkedin.com/in/paulluen"), false);
   assert.equal(isSalesNavigatorLeadUrl("https://example.com/sales/lead/id"), false);
 });
@@ -187,4 +190,85 @@ test("new profile UI uses the target direct invite link and adds a note", async 
   const page = context.pages()[0];
   assert.equal(await page.locator("textarea").inputValue(), "Hello from the new UI");
   assert.deepEqual(await page.evaluate(() => window.clicked), ["target-connect", "add-note"]);
+});
+
+test("out-of-network Sales Navigator lead opens LinkedIn profile before prefilling", async (t) => {
+  const browser = await chromium.launch(chromiumLaunchOptions());
+  t.after(() => browser.close());
+  const context = await browser.newContext();
+  const profileUrl = "https://www.linkedin.com/in/sample-customer";
+
+  await context.route("https://www.linkedin.com/sales/lead/**", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html>
+        <main>
+          <section>
+            <h1>LinkedIn Member</h1>
+            <button id="more" aria-controls="lead-menu">More</button>
+          </section>
+          <div id="lead-menu" role="menu" hidden>
+            <a id="view-profile" role="menuitem" href="${profileUrl}">View LinkedIn profile</a>
+          </div>
+        </main>
+        <script>
+          window.clicked = [];
+          document.querySelector('#more').onclick = () => {
+            window.clicked.push('more');
+            document.querySelector('#lead-menu').hidden = false;
+          };
+        </script>`,
+    }),
+  );
+
+  await context.route(profileUrl, (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html>
+        <main>
+          <section>
+            <span>Sample Customer</span>
+            <a id="profile-connect"
+               aria-label="Invite Sample Customer to connect"
+               href="/preload/custom-invite/?vanityName=sample-customer">Connect</a>
+          </section>
+          <div id="dialog" role="dialog" hidden>
+            <button id="add-note">Add a note</button>
+            <textarea name="message" hidden></textarea>
+            <button id="send">Send</button>
+          </div>
+        </main>
+        <script>
+          window.clicked = [];
+          document.querySelector('#profile-connect').onclick = (event) => {
+            event.preventDefault();
+            window.clicked.push('profile-connect');
+            document.querySelector('#dialog').hidden = false;
+          };
+          document.querySelector('#add-note').onclick = () => {
+            window.clicked.push('add-note');
+            document.querySelector('textarea').hidden = false;
+          };
+          document.querySelector('#send').onclick = () => window.clicked.push('send');
+        </script>`,
+    }),
+  );
+
+  const result = await processCustomer(
+    context,
+    {
+      name: "Sample Customer",
+      linkedin: OUT_OF_NETWORK_SALES_LEAD_URL,
+      message: "Hello after opening the LinkedIn profile",
+    },
+    10_000,
+  );
+
+  assert.equal(result.status, "prefilled");
+  assert.equal(result.linkedin_note_filled, "yes");
+  assert.equal(result.external_sent, "no");
+  const page = context.pages()[0];
+  assert.equal(page.url(), profileUrl);
+  assert.equal(await page.locator("textarea").inputValue(), "Hello after opening the LinkedIn profile");
+  assert.deepEqual(await page.evaluate(() => window.clicked), ["profile-connect", "add-note"]);
 });

@@ -43,7 +43,7 @@ npm run linkedin:prefill -- \
 - 要求页面姓名与输入的 `name` 不区分大小写地完全相等，失败则不继续操作；
 - 检查资料卡和“更多”菜单中的 Pending/已发送/Connected 等状态，已有状态时跳过并返回提示；
 - 普通个人资料页优先打开资料卡直接显示的“Connect/加为好友”按钮或链接，必要时再从“更多”菜单进入；
-- Sales Navigator lead 页面固定点击客户信息区的三点“更多”菜单，再点击其中的“Connect/加为好友”；
+- Sales Navigator lead 页面先打开客户信息区的二次菜单；若存在“View LinkedIn profile/查看 LinkedIn 个人资料”，先跳转到 `/in/...` 个人主页，再复用普通资料页流程；旧版菜单直接提供“Connect/加为好友”时继续兼容该入口；
 - 等待弹出的消息输入框并填入 `message`，不点击“Send/发送”；
 - 填入后回读文本校验，校验失败按失败处理。
 
