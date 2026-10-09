@@ -344,22 +344,29 @@ async function openMoreMenu(page, scope, timeoutMs) {
   }
 }
 
-async function openSalesNavigatorProfile(page, scope, timeoutMs) {
+async function openSalesNavigatorProfile(page, scope, timeoutMs, transition) {
   const menuScope = await openMoreMenu(page, scope, timeoutMs);
   const profileAction = await visibleMenuAction(menuScope, VIEW_LINKEDIN_PROFILE_PATTERN);
   if (!profileAction) {
     return { profilePage: null, menuScope };
   }
 
-  const context = page.context();
+  transition.sourcePage = page;
   const profileUrlPattern = /(^|\.)linkedin\.com\/in\/[^/?#]+/i;
   const samePage = page
     .waitForURL(profileUrlPattern, { timeout: timeoutMs })
     .then(() => page)
     .catch(() => null);
-  const popup = context
-    .waitForEvent("page", { timeout: timeoutMs })
-    .then((candidate) => candidate)
+  const popup = page
+    .waitForEvent("popup", { timeout: timeoutMs })
+    .then(async (candidate) => {
+      if (transition.aborted) {
+        await candidate.close().catch(() => {});
+        return null;
+      }
+      transition.profilePage = candidate;
+      return candidate;
+    })
     .catch(() => null);
 
   await profileAction.click();
@@ -445,6 +452,7 @@ async function fillInvitationNote(page, message, timeoutMs) {
 export async function processCustomer(context, customer, timeoutMs) {
   let page;
   let timeoutHandle;
+  const profileTransition = { sourcePage: null, profilePage: null, aborted: false };
   const operation = (async () => {
     page = await context.newPage();
     page.setDefaultTimeout(timeoutMs);
@@ -459,10 +467,19 @@ export async function processCustomer(context, customer, timeoutMs) {
     let connect = null;
 
     if (isSalesNavigatorLead) {
-      const leadAction = await openSalesNavigatorProfile(page, scope, timeoutMs);
+      const leadAction = await openSalesNavigatorProfile(page, scope, timeoutMs, profileTransition);
+      // The outer customer timeout may finish while profile navigation is pending.
+      if (profileTransition.aborted) {
+        throw new Error("Customer operation already ended");
+      }
       if (leadAction.profilePage) {
+        const sourcePage = page;
         page = leadAction.profilePage;
         page.setDefaultTimeout(timeoutMs);
+        if (page !== sourcePage) {
+          await sourcePage.close();
+        }
+        profileTransition.sourcePage = null;
         scope = await profileCard(page, page.url(), timeoutMs);
       } else {
         // Keep compatibility with lead pages that still expose Connect in the
@@ -539,9 +556,12 @@ export async function processCustomer(context, customer, timeoutMs) {
       }),
     ]);
   } catch (error) {
+    profileTransition.aborted = true;
     operation.catch(() => {});
-    if (page && /timeout/i.test(error?.message ?? "")) {
-      await page.close().catch(() => {});
+    const cleanupPage = profileTransition.profilePage ?? page;
+    const timeoutPattern = profileTransition.profilePage ? /timeout|timed out/i : /timeout/i;
+    if (cleanupPage && cleanupPage !== profileTransition.sourcePage && timeoutPattern.test(error?.message ?? "")) {
+      await cleanupPage.close().catch(() => {});
     }
     return {
       name: customer.name,
