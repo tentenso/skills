@@ -98,7 +98,7 @@ test("standard profile fallback finds an exact name without an h1", async (t) =>
 
   await context.route(profileUrl, (route) =>
     route.fulfill({
-      contentType: "text/html",
+      contentType: "text/html; charset=utf-8",
       body: `<!doctype html>
         <main>
           <section componentkey="Topcard">
@@ -135,7 +135,7 @@ test("new profile UI uses the target direct invite link and adds a note", async 
 
   await context.route(profileUrl, (route) =>
     route.fulfill({
-      contentType: "text/html",
+      contentType: "text/html; charset=utf-8",
       body: `<!doctype html>
         <main>
           <section id="recommendation-card">
@@ -335,3 +335,71 @@ for (const failure of ["no-popup", "wrong-url", "connect-timeout"]) {
     }
   });
 }
+
+test("modern profile redesign with native <dialog>, div Topcard, and More menu connect prefill", async (t) => {
+  const browser = await chromium.launch(chromiumLaunchOptions());
+  t.after(() => browser.close());
+  const context = await browser.newContext();
+  const profileUrl = "https://www.linkedin.com/in/les-litwin/";
+
+  await context.route(profileUrl, (route) =>
+    route.fulfill({
+      contentType: "text/html; charset=utf-8",
+      body: `<!doctype html>
+        <main>
+          <div componentkey="com.linkedin.sdui.profile.card.refTopcard">
+            <h2>Les Litwin</h2>
+            <button id="more" aria-label="更多" aria-controls="actions-menu">… 更多</button>
+          </div>
+          <div id="actions-menu" role="menu" hidden>
+            <button id="menu-connect" role="menuitem">加为好友</button>
+          </div>
+          <dialog id="invite-dialog" data-testid="dialog">
+            <div id="step-prompt">
+              <p>在邀请中添加备注？</p>
+              <a id="add-note-link" href="${profileUrl}">添加备注</a>
+              <button id="send-without-note">发送时不添加备注</button>
+            </div>
+            <div id="step-input" hidden>
+              <div id="note-input" contenteditable="true"></div>
+              <button id="send">发送</button>
+            </div>
+          </dialog>
+        </main>
+        <script>
+          window.clicked = [];
+          document.querySelector('#more').onclick = () => {
+            window.clicked.push('more');
+            document.querySelector('#actions-menu').hidden = false;
+          };
+          document.querySelector('#menu-connect').onclick = () => {
+            window.clicked.push('menu-connect');
+            const dialog = document.querySelector('#invite-dialog');
+            dialog.setAttribute('open', '');
+          };
+          document.querySelector('#add-note-link').onclick = (e) => {
+            e.preventDefault();
+            window.clicked.push('add-note-link');
+            document.querySelector('#step-prompt').hidden = true;
+            document.querySelector('#step-input').hidden = false;
+          };
+          document.querySelector('#send').onclick = () => window.clicked.push('send');
+        </script>`,
+    }),
+  );
+
+  const result = await processCustomer(
+    context,
+    { name: "Les Litwin", linkedin: profileUrl, message: " hi，happy to connect！ " },
+    10_000,
+  );
+
+  assert.equal(result.status, "prefilled");
+  assert.equal(result.linkedin_note_filled, "yes");
+  assert.equal(result.external_sent, "no");
+  assert.equal(result.failure_reason, null);
+  const page = context.pages()[0];
+  const editableText = (await page.locator("#note-input").innerText()).replace(/\u00A0/g, " ");
+  assert.equal(editableText, " hi，happy to connect！ ");
+  assert.deepEqual(await page.evaluate(() => window.clicked), ["more", "menu-connect", "add-note-link"]);
+});

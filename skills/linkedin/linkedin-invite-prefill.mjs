@@ -23,7 +23,7 @@ const CONNECTION_STATES = [
 const CONNECT_ACTION_PATTERN =
   /\bconnect\b|\badd friend\b|\binvite .* to connect\b|加为好友|添加好友|建立联系|邀请建立联系/i;
 const MORE_ACTION_PATTERN =
-  /^(?:open actions overflow menu|more(?: actions?)?|see more(?: actions?)?|更多(?:操作)?)(?:\s*\.\.\.)?$/i;
+  /^(?:[…\.]*\s*)?(?:open actions overflow menu|more(?: actions?)?|see more(?: actions?)?|更多(?:操作)?)(?:\s*[…\.]+)?$/i;
 const ADD_NOTE_PATTERN = /^(?:add a note|add note|添加消息|添加备注)$/i;
 const VIEW_LINKEDIN_PROFILE_PATTERN =
   /view\s+linkedin\s+profile|查看\s*(?:linkedin|领英)\s*(?:个人资料|个人档案)/i;
@@ -141,7 +141,7 @@ async function readInput(inputPath) {
 }
 
 async function visibleDialog(page, timeoutMs) {
-  const dialogs = page.locator('[role="dialog"]:visible');
+  const dialogs = page.locator('dialog:visible, [role="dialog"]:visible');
   const dialog = dialogs.last();
   try {
     await dialog.waitFor({ state: "visible", timeout: timeoutMs });
@@ -153,7 +153,7 @@ async function visibleDialog(page, timeoutMs) {
 
 async function profileCard(page, profileUrl, timeoutMs) {
   const landmarkTimeout = Math.min(timeoutMs, 5_000);
-  const topCard = page.locator('section[componentkey*="Topcard"]:visible').first();
+  const topCard = page.locator('[componentkey*="Topcard"]:visible').first();
   if (await topCard.count()) {
     try {
       await topCard.waitFor({ state: "visible", timeout: landmarkTimeout });
@@ -163,7 +163,7 @@ async function profileCard(page, profileUrl, timeoutMs) {
     }
   }
 
-  const genericCard = page.locator('section[componentkey*="profile.card"]:visible').first();
+  const genericCard = page.locator('[componentkey*="profile.card"]:visible').first();
   if (await genericCard.count()) {
     try {
       await genericCard.waitFor({ state: "visible", timeout: landmarkTimeout });
@@ -176,9 +176,15 @@ async function profileCard(page, profileUrl, timeoutMs) {
   const main = page.locator("main").first();
   const directInvite = await visibleProfileInviteLink(main, profileUrl);
   if (directInvite) {
-    const directInviteCard = directInvite.locator("xpath=ancestor::section[1]");
+    const directInviteCard = directInvite.locator(
+      "xpath=ancestor::*[self::section or self::div][@componentkey][1]",
+    );
     if (await directInviteCard.count()) {
       return directInviteCard;
+    }
+    const directInviteSection = directInvite.locator("xpath=ancestor::section[1]");
+    if (await directInviteSection.count()) {
+      return directInviteSection;
     }
   }
 
@@ -207,7 +213,7 @@ async function profileName(page, scope, expectedName, timeoutMs) {
     }
   }
 
-  const headings = scope.locator("h1:visible");
+  const headings = scope.locator("h1:visible, h2:visible");
   let headingTexts = [];
   if (await headings.count()) {
     try {
@@ -395,6 +401,26 @@ async function openConnectFromMenu(menuScope) {
   return { existingState: null };
 }
 
+async function visibleProfileConnectButton(scope, expectedName) {
+  const matches = scope.getByRole("button", { name: CONNECT_ACTION_PATTERN });
+  const count = await matches.count();
+  for (let index = 0; index < count; index += 1) {
+    const match = matches.nth(index);
+    if (!(await match.isVisible().catch(() => false))) {
+      continue;
+    }
+    const ariaLabel = (await match.getAttribute("aria-label").catch(() => "")) || "";
+    if (expectedName && /(?:invite|邀请)/i.test(ariaLabel)) {
+      const stripped = ariaLabel.replace(/(?:invite|邀请|to connect|加为好友)/gi, "").trim();
+      if (!exactNamePattern(expectedName).test(stripped)) {
+        continue;
+      }
+    }
+    return match;
+  }
+  return null;
+}
+
 async function openConnectDialog(page, scope, timeoutMs, options = {}) {
   if (!options.requireMoreMenu) {
     // LinkedIn's newer profile UI renders the primary Connect action as an
@@ -403,7 +429,7 @@ async function openConnectDialog(page, scope, timeoutMs, options = {}) {
     // elsewhere on the page cannot be clicked by mistake.
     const directConnect =
       (await visibleProfileInviteLink(scope, options.profileUrl)) ??
-      (await visibleMatch(scope, "button", CONNECT_ACTION_PATTERN));
+      (await visibleProfileConnectButton(scope, options.expectedName));
     if (directConnect) {
       await directConnect.click();
       return { existingState: null };
@@ -419,16 +445,26 @@ async function fillInvitationNote(page, message, timeoutMs) {
     throw new Error("Invitation dialog did not open");
   }
 
-  const addNote =
-    (await visibleMatch(dialog, "button", ADD_NOTE_PATTERN)) ??
-    (await visibleMatch(dialog, "link", ADD_NOTE_PATTERN));
-  if (addNote) {
-    await addNote.click();
-  }
-
   const editable = dialog.locator(
     'textarea:visible, [contenteditable="true"]:visible',
   ).last();
+
+  const probeTimeout = Math.min(timeoutMs, 5_000);
+  const deadline = Date.now() + probeTimeout;
+  while (Date.now() < deadline) {
+    if (await editable.isVisible().catch(() => false)) {
+      break;
+    }
+    const addNote =
+      (await visibleMatch(dialog, "button", ADD_NOTE_PATTERN)) ??
+      (await visibleMatch(dialog, "link", ADD_NOTE_PATTERN));
+    if (addNote) {
+      await addNote.click();
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
   try {
     await editable.waitFor({ state: "visible", timeout: timeoutMs });
   } catch {
@@ -442,7 +478,8 @@ async function fillInvitationNote(page, message, timeoutMs) {
     );
   }
   await editable.fill(message);
-  const value = await editable.inputValue().catch(async () => editable.innerText());
+  const rawValue = await editable.inputValue().catch(async () => editable.innerText());
+  const value = rawValue.replace(/\u00A0/g, " ");
   if (value !== message) {
     throw new Error("Invitation note could not be verified after filling");
   }
@@ -516,6 +553,7 @@ export async function processCustomer(context, customer, timeoutMs) {
       connect = await openConnectDialog(page, scope, timeoutMs, {
         requireMoreMenu: false,
         profileUrl: page.url(),
+        expectedName: customer.name,
       });
     }
 
